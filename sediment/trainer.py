@@ -1,0 +1,167 @@
+"""Candidate trainer: hindsight-weighted token CE -> LoRA adapter dir.
+
+`train_candidate` is the single entry point. cfg.trainer selects "stub"
+(metadata only, no heavy deps -- used by all tests) or "torch" (lazy
+transformers/peft LoRA fine-tune).
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from typing import Any
+
+from .config import StreamConfig
+from .types import AdapterVersion, TrainSample, UpdateCandidate
+
+LORA_TARGET_MODULES = ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"]
+
+
+def candidate_id_for(task_ids: list[str], parent_name: str) -> str:
+    """Short deterministic id from the trained task ids + parent version."""
+    h = hashlib.sha256(json.dumps([task_ids, parent_name]).encode()).hexdigest()
+    return f"cand-{h[:10]}"
+
+
+def _weight_stats(sample: TrainSample) -> dict[str, Any]:
+    """Per-sample stats over the flattened token weights."""
+    flat = [w for ws in sample.token_weights_by_msg for w in ws]
+    if not flat:
+        return {"task_id": sample.task_id, "mean": 0.0, "max": 0.0, "nonzero": 0}
+    return {
+        "task_id": sample.task_id,
+        "mean": float(sum(flat) / len(flat)),
+        "max": float(max(flat)),
+        "nonzero": int(sum(1 for w in flat if w > 0.0)),
+    }
+
+
+def train_candidate(
+    samples: list[TrainSample],
+    parent: AdapterVersion,
+    cfg: StreamConfig,
+    workdir: str,
+) -> UpdateCandidate:
+    """Train (or stub out) one update candidate from weighted samples.
+
+    Writes the adapter into ``{workdir}/{candidate_id}/``: stub mode emits
+    only ``adapter_meta.json`` (task ids, parent, per-sample weight stats);
+    torch mode saves a peft LoRA checkpoint via ``save_pretrained``.
+    """
+    task_ids = [s.task_id for s in samples]
+    cid = candidate_id_for(task_ids, parent.name)
+    out_dir = os.path.join(workdir, cid)
+    os.makedirs(out_dir, exist_ok=True)
+    stats = [_weight_stats(s) for s in samples]
+    if cfg.trainer == "stub":
+        meta = {
+            "candidate_id": cid,
+            "task_ids": task_ids,
+            "parent": parent.name,
+            "samples": stats,
+        }
+        with open(os.path.join(out_dir, "adapter_meta.json"), "w") as f:
+            json.dump(meta, f, indent=2)
+        train_stats: dict[str, Any] = {"mode": "stub", "n_samples": len(samples), "samples": stats}
+    elif cfg.trainer == "torch":
+        losses = _train_torch(samples, parent, cfg, out_dir)
+        train_stats = {"mode": "torch", "n_samples": len(samples), "samples": stats, "losses": losses}
+    else:
+        raise ValueError(f"unknown trainer: {cfg.trainer!r}")
+    return UpdateCandidate(
+        candidate_id=cid,
+        task_ids=task_ids,
+        adapter_path=out_dir,
+        parent=parent.name,
+        train_stats=train_stats,
+    )
+
+
+def _encode(tokenizer, sample: TrainSample, max_seq_len: int) -> tuple[list[int], list[float]]:
+    """Token ids + parallel CE weights for one sample.
+
+    Alignment assumption: ``token_weights_by_msg`` was computed against the
+    engine-side tokenization of the same messages (sediment.spans). Here the
+    trainer re-derives per-message token spans by applying the chat template
+    incrementally over message prefixes (the same construction as
+    ``spans.message_spans``, relying on the template's token prefix
+    property). When a message's trainer-side span length equals its weight
+    list length the weights map 1:1; otherwise the message's mean weight is
+    broadcast uniformly over every token of its span (framing tokens
+    included). Prompt/system messages carry all-zero weights either way.
+    """
+    msgs = [m.to_dict() for m in sample.messages]
+    prev: list[int] = []
+    ids: list[int] = []
+    weights: list[float] = []
+    for i in range(1, len(msgs) + 1):
+        toks = tokenizer.apply_chat_template(msgs[:i], tokenize=True)
+        if toks[: len(prev)] != prev:
+            raise AssertionError(
+                f"chat template broke the token prefix property at message {i - 1}; "
+                "per-message weight alignment would be invalid"
+            )
+        span = len(toks) - len(prev)
+        ws = sample.token_weights_by_msg[i - 1]
+        if len(ws) == span:
+            weights.extend(float(w) for w in ws)
+        else:
+            mean = float(sum(ws) / len(ws)) if ws else 0.0
+            weights.extend([mean] * span)
+        ids.extend(toks[len(prev):])
+        prev = toks
+    return ids[:max_seq_len], weights[:max_seq_len]
+
+
+def _train_torch(
+    samples: list[TrainSample],
+    parent: AdapterVersion,
+    cfg: StreamConfig,
+    out_dir: str,
+) -> list[float]:
+    """LoRA fine-tune with per-token weighted CE; returns per-step losses."""
+    import torch
+    from peft import LoraConfig, PeftModel, get_peft_model
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model)
+    model = AutoModelForCausalLM.from_pretrained(cfg.model, torch_dtype=torch.bfloat16)
+    if parent.path is not None:
+        model = PeftModel.from_pretrained(model, parent.path, is_trainable=True)
+    else:
+        lora = LoraConfig(
+            r=cfg.lora_r,
+            lora_alpha=cfg.lora_alpha,
+            target_modules=LORA_TARGET_MODULES,
+            task_type="CAUSAL_LM",
+        )
+        model = get_peft_model(model, lora)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device).train()
+    opt = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=cfg.lr)
+
+    losses: list[float] = []
+    step = 0
+    for _ in range(cfg.epochs):
+        for sample in samples:
+            ids, ws = _encode(tokenizer, sample, cfg.max_seq_len)
+            if len(ids) < 2 or sum(ws) <= 0.0:
+                continue
+            input_ids = torch.tensor([ids], device=device)
+            w = torch.tensor([ws[1:]], dtype=torch.float32, device=device)
+            logits = model(input_ids=input_ids).logits[:, :-1].float()
+            ce = torch.nn.functional.cross_entropy(
+                logits.transpose(1, 2), input_ids[:, 1:], reduction="none"
+            )
+            loss = (ce * w).sum() / w.sum().clamp_min(1e-8)
+            (loss / cfg.micro_batch).backward()
+            losses.append(float(loss.detach()))
+            step += 1
+            if step % cfg.micro_batch == 0:
+                opt.step()
+                opt.zero_grad()
+    if step % cfg.micro_batch != 0:
+        opt.step()
+        opt.zero_grad()
+    model.save_pretrained(out_dir)
+    return losses

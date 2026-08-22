@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+results/
+results_remote/
+data/
+third_party/
+*.egg-info/
+.DS_Store
