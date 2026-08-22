@@ -154,6 +154,7 @@ def run_task(
     cfg: StreamConfig,
     run_dir: Path,
     tag: str,
+    traj_f=None,
 ) -> dict[str, Any]:
     lopd = cfg.extra["lopd_dir"]
     timings: dict[str, float] = {}
@@ -181,6 +182,16 @@ def run_task(
     hr = timed("hindsight", lambda: hindsight_score(engine, first, block, cfg))
     rec["obs_surprise"] = round(hr.obs_surprise, 5)
     rec["act_gain"] = round(hr.act_gain, 5)
+    if traj_f is not None:  # raw material for incremental-hindsight analysis (P1.5)
+        traj_f.write(json.dumps({
+            "task_id": task["task_id"],
+            "reward": first.reward,
+            "block": block.text,
+            "messages": [m.to_dict() for m in first.messages],
+            "spans": [{"msg_idx": s.msg_idx, "role": s.role,
+                       "deltas": [round(d, 4) for d in s.deltas]} for s in hr.spans],
+        }, ensure_ascii=False) + "\n")
+        traj_f.flush()
     sample = to_train_sample(first, hr, cfg)
     rec["n_supervised"] = sum(1 for ws in sample.token_weights_by_msg for w in ws if w > 0)
 
@@ -247,13 +258,14 @@ def main() -> None:
     trainer = ResidentTrainer(cfg)
     print(f"[shard {args.shard}] trainer resident on {trainer.device}", flush=True)
 
-    with out_path.open("a", encoding="utf-8") as f:
+    traj_path = run_dir / f"traj_shard{args.shard}.jsonl"
+    with out_path.open("a", encoding="utf-8") as f, traj_path.open("a", encoding="utf-8") as tf:
         for k, task in enumerate(mine):
             if task["task_id"] in done:
                 continue
             t0 = time.time()
             try:
-                rec = run_task(task, engine, trainer, cfg, run_dir, args.tag)
+                rec = run_task(task, engine, trainer, cfg, run_dir, args.tag, traj_f=tf)
             except Exception as e:  # record and move on; relaunch skips it
                 rec = {
                     "task_id": task["task_id"],

@@ -20,6 +20,25 @@
 附加测量：①内化后把 E_x 放回 context 再测（NCA 上下文回归检查）；
 ②任务池按 P0 dead-zone 取 mixed + rescued（all-success 无信号，all-fail 无底力）。
 
+### P1.5 增量 hindsight 仪器化（证据结算曲线）
+
+v0 信号是净位移：Δ(i) = logp(tok_i|结局块) − logp(tok_i|∅)，把三角矩阵 Δ(i,j)
+（第 j 步反馈对第 i 步 token 的再定价，j≥i；step1 有 K 个增量、step2 有 K−1 个…）
+折叠成一列。telescoping：Σ_j Δ(i,j) = 以全部未来证据为条件的净位移——**训练用净位移
+不丢总量**（中途增量含会被后续证据推翻的解释，直接训练 = 自训漂移入口）；丢掉的是
+**路径分解**，其正确用途是门控：结算曲线形态（单调早结算 = 稳健事实 vs 振荡晚结算 =
+解释层争议）是 token 级信任特征——信念空间的 TD 分解，类比 prioritized replay 用
+|TD| 做优先级而训练用 return。振荡路径 = 解释层残差的运行时指纹（衔接 robagent 分界）。
+
+约束（copy-safe 铁律的推广）：增量条件块必须是结算式压缩摘要（outcome-like），
+不得含逐字未来观测，否则 obs token 的 delta 退化为复制检测。
+
+落地：worker 已 dump 首答轨迹 + 逐 span deltas（`traj_shard*.jsonl`，s1 起生效）。
+s0–s2 完成后抽 20–30 任务离线重打分构造完整 Δ(i,j)，测：① telescoping 校验；
+② error/普通 obs 的结算曲线形态差异；③ **路径方差是否预测 ours 臂成败**
+（若预测 → 升级为 G1 门控特征）。另一便宜升级待测：块从仅 outcome 扩为全程
+结算摘要（仍 2 次 prefill，净信号更富，同样受 copy-safe 约束）。
+
 ## P2 无门控流式累积（负对照，与 P1 并行）
 
 100–300 任务流，逐任务更新直接合入 session adapter，不门控。
