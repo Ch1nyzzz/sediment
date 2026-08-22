@@ -2,7 +2,7 @@
 # One-line machine-readable pulse for the P1 pipeline (run on the box).
 cd /data/erv1n/sediment 2>/dev/null || exit 1
 d=DEAD; pgrep -f "scripts/p1_driver.sh" >/dev/null 2>&1 && d=ALIVE
-stage=$(grep -E "^[0-9]{4}_" results/driver.log 2>/dev/null | tail -1)
+stage=$(cat results/driver*.log 2>/dev/null | grep -E "^[0-9]{4}_" | tail -1)
 total=$(cat results/p1_*/p1_shard*.jsonl 2>/dev/null | wc -l | tr -d " ")
 errs=$(cat results/p1_*/p1_shard*.jsonl 2>/dev/null | grep -c '"error"')
 w=0

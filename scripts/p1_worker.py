@@ -33,12 +33,21 @@ if str(ROOT) not in sys.path:
 from sediment.config import StreamConfig
 from sediment.engine.vllm_client import VllmClient
 from sediment.envs.envscaler import EnvScalerAdapter, list_tasks
-from sediment.experience import build_block
+from sediment.experience import (
+    EXPERIENCE_CLOSE,
+    EXPERIENCE_OPEN,
+    _final_feedback,
+    _outcome,
+    _steps,
+    _tail,
+    _truncate,
+    build_block,
+)
 from sediment.hindsight import score as hindsight_score
 from sediment.hindsight import to_train_sample
 from sediment.rollout.agent_loop import run_episode
 from sediment.trainer import LORA_TARGET_MODULES, _encode, weighted_ce
-from sediment.types import AdapterVersion, TrainSample, Trajectory
+from sediment.types import AdapterVersion, ExperienceBlock, TrainSample, Trajectory
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,6 +65,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507")
     p.add_argument("--epochs", type=int, default=2)
     p.add_argument("--tag", default="s0", help="run tag (e.g. seed label)")
+    p.add_argument("--block-mode", choices=["outcome", "steps"], default="outcome",
+                   help="E_x completeness: outcome-only (v0) or settled step summary (v1)")
     return p.parse_args()
 
 
@@ -125,6 +136,52 @@ class ResidentTrainer:
         return losses
 
 
+STATUS_RE = re.compile(r"error|invalid|fail|exceed|denied|cannot|unable", re.I)
+
+
+def build_block_steps(first: Trajectory) -> ExperienceBlock:
+    """v1 evidence block: settled summary of the OWN attempt — verbatim actions,
+    coarse per-step result status (ok/ERROR), outcome + full final feedback.
+
+    Step RESULT CONTENTS deliberately stay out of the block: their tokens are
+    exactly what hindsight prices, so verbatim inclusion would turn deltas into
+    copy detection. The final feedback lives in meta (never a scored message),
+    hence copy-safe verbatim.
+    """
+    ok, r = _outcome(first)
+    tag = "SUCCEEDED" if ok else "FAILED"
+    lines = [
+        EXPERIENCE_OPEN,
+        "Below is a settled summary of your own previous attempt on this task. "
+        "Judge each step with the final outcome in mind, then solve the task.",
+        "",
+    ]
+    for n, (action, result) in enumerate(_steps(first), 1):
+        status = "ERROR" if STATUS_RE.search(result[:300]) else "ok"
+        lines.append(f"  {n}. {_truncate(action, 120)} -> {status}")
+    lines.append("")
+    lines.append(f"--- This attempt ultimately {tag} (reward={r}). ---")
+    # true terminal settlement first (meta-only, never a scored message);
+    # last in-trajectory obs only as fallback
+    fb = str(first.meta.get("final_obs", "") or "") or _final_feedback(first)
+    if fb:
+        lines.append(f"Final feedback: {_tail(fb, 400)}")
+    lines.append(EXPERIENCE_CLOSE)
+    return ExperienceBlock(
+        text="\n".join(lines), source_task_ids=[], includes_own_outcome=True
+    )
+
+
+def zero_action_weights(sample: TrainSample) -> TrainSample:
+    """steps-mode: actions are verbatim in the block, so their deltas are
+    copy-contaminated -> train the belief (tool) channel only."""
+    ws = [
+        [0.0] * len(w) if m.role == "assistant" else list(w)
+        for m, w in zip(sample.messages, sample.token_weights_by_msg)
+    ]
+    return TrainSample(sample.task_id, list(sample.messages), ws)
+
+
 def uniform_sample(sample: TrainSample) -> TrainSample:
     """Same token support as the weighted sample, every supervised weight = 1."""
     return TrainSample(
@@ -175,7 +232,9 @@ def run_task(
 
     rec["retry"] = episode_result(timed("retry", lambda: roll()))
 
-    block = build_block([], first, cfg)
+    mode = cfg.extra.get("block_mode", "outcome")
+    block = build_block_steps(first) if mode == "steps" else build_block([], first, cfg)
+    rec["block_mode"] = mode
     rec["block_chars"] = len(block.text)
     rec["icl"] = episode_result(timed("icl", lambda: roll(experience=block)))
 
@@ -193,9 +252,13 @@ def run_task(
         }, ensure_ascii=False) + "\n")
         traj_f.flush()
     sample = to_train_sample(first, hr, cfg)
+    uni = uniform_sample(sample)
+    if mode == "steps":  # belief channel only: actions are verbatim in the block
+        sample = zero_action_weights(sample)
+        uni = zero_action_weights(uni)
     rec["n_supervised"] = sum(1 for ws in sample.token_weights_by_msg for w in ws if w > 0)
 
-    for arm, s in (("ours", sample), ("uniform", uniform_sample(sample))):
+    for arm, s in (("ours", sample), ("uniform", uni)):
         name = f"{tag}-{sanitize(task['task_id'])}-{arm}"
         adir = run_dir / "candidates" / name
         losses = timed(f"{arm}_train", lambda s=s, adir=adir: trainer.train(s, str(adir)))
@@ -229,7 +292,8 @@ def main() -> None:
         split="rl",
         out_dir=str(run_dir),
         run_id=args.tag,
-        extra={"lopd_dir": args.lopd_dir, "base_url": args.base_url},
+        extra={"lopd_dir": args.lopd_dir, "base_url": args.base_url,
+               "block_mode": args.block_mode},
     )
     if args.shard == 0:
         (run_dir / "config.json").write_text(json.dumps(cfg.to_dict(), indent=2))
