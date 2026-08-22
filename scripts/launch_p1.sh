@@ -13,28 +13,32 @@ GPUS=(${GPUS:-4 5 6 7})
 NW=${#GPUS[@]}
 RUN_ID=${RUN_ID:-p1_dev}
 OUT=$SED/results/$RUN_ID
+SRVDIR=$SED/results/servers  # vLLM servers are shared across runs/seeds
 PORT0=${PORT0:-8104}
 WORKER_ARGS=${WORKER_ARGS:-}
-mkdir -p "$OUT"
+mkdir -p "$OUT" "$SRVDIR"
 
 export HF_HOME=/data/hf_cache TMPDIR=$BASE/.tmp PIP_CACHE_DIR=$BASE/.pip_cache
 export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# box has no /usr/local/cuda; avoid flashinfer JIT (needs nvcc) entirely
+export VLLM_USE_FLASHINFER_SAMPLER=0
+export VLLM_ATTENTION_BACKEND=${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}
 
 alive() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
 
 for i in "${!GPUS[@]}"; do
   gpu=${GPUS[$i]}; port=$((PORT0 + i))
-  if alive "$OUT/vllm_$gpu.pid"; then
-    echo "vllm gpu$gpu already running (pid $(cat "$OUT/vllm_$gpu.pid"))"
+  if alive "$SRVDIR/vllm_$gpu.pid"; then
+    echo "vllm gpu$gpu already running (pid $(cat "$SRVDIR/vllm_$gpu.pid"))"
   else
     CUDA_VISIBLE_DEVICES=$gpu nohup "$SERVE_PY" -m vllm.entrypoints.openai.api_server \
       --model "$MODEL" --host 127.0.0.1 --port "$port" \
       --enable-lora --max-lora-rank 32 --max-loras 4 \
       --enable-prefix-caching --max-model-len 12288 \
-      --gpu-memory-utilization 0.45 \
-      > "$OUT/vllm_$gpu.log" 2>&1 &
-    echo $! > "$OUT/vllm_$gpu.pid"
+      --gpu-memory-utilization 0.40 \
+      > "$SRVDIR/vllm_$gpu.log" 2>&1 &
+    echo $! > "$SRVDIR/vllm_$gpu.pid"
     echo "vllm gpu$gpu -> port $port (pid $!)"
   fi
 done
@@ -44,11 +48,11 @@ for i in "${!GPUS[@]}"; do
   gpu=${GPUS[$i]}; port=$((PORT0 + i)); up=0
   for _ in $(seq 1 90); do
     if curl -sf "http://127.0.0.1:$port/v1/models" >/dev/null 2>&1; then up=1; break; fi
-    alive "$OUT/vllm_$gpu.pid" || break
+    alive "$SRVDIR/vllm_$gpu.pid" || break
     sleep 5
   done
   if [ "$up" != 1 ]; then
-    echo "FATAL: vllm gpu$gpu (port $port) not healthy; see $OUT/vllm_$gpu.log" >&2
+    echo "FATAL: vllm gpu$gpu (port $port) not healthy; see $SRVDIR/vllm_$gpu.log" >&2
     exit 1
   fi
   echo "vllm gpu$gpu healthy"

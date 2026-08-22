@@ -95,7 +95,8 @@ def _encode(tokenizer, sample: TrainSample, max_seq_len: int) -> tuple[list[int]
     ids: list[int] = []
     weights: list[float] = []
     for i in range(1, len(msgs) + 1):
-        toks = tokenizer.apply_chat_template(msgs[:i], tokenize=True)
+        # return_dict=False: transformers 5.x defaults to a BatchEncoding here
+        toks = list(tokenizer.apply_chat_template(msgs[:i], tokenize=True, return_dict=False))
         if toks[: len(prev)] != prev:
             raise AssertionError(
                 f"chat template broke the token prefix property at message {i - 1}; "
@@ -111,6 +112,23 @@ def _encode(tokenizer, sample: TrainSample, max_seq_len: int) -> tuple[list[int]
         ids.extend(toks[len(prev):])
         prev = toks
     return ids[:max_seq_len], weights[:max_seq_len]
+
+
+def weighted_ce(logits, targets, weights, chunk: int = 2048):
+    """Weighted token CE with the float32 cast done per chunk (memory-bound
+    otherwise: full-length fp32 logits on a 12k-token sequence are ~7GB)."""
+    import torch
+
+    parts = []
+    for s in range(0, targets.shape[1], chunk):
+        lg = logits[:, s : s + chunk].float()
+        parts.append(
+            torch.nn.functional.cross_entropy(
+                lg.transpose(1, 2), targets[:, s : s + chunk], reduction="none"
+            )
+        )
+    ce = torch.cat(parts, dim=1)
+    return (ce * weights).sum() / weights.sum().clamp_min(1e-8)
 
 
 def _train_torch(
@@ -136,6 +154,9 @@ def _train_torch(
             task_type="CAUSAL_LM",
         )
         model = get_peft_model(model, lora)
+    model.config.use_cache = False
+    model.enable_input_require_grads()
+    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device).train()
     opt = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=cfg.lr)
@@ -149,11 +170,8 @@ def _train_torch(
                 continue
             input_ids = torch.tensor([ids], device=device)
             w = torch.tensor([ws[1:]], dtype=torch.float32, device=device)
-            logits = model(input_ids=input_ids).logits[:, :-1].float()
-            ce = torch.nn.functional.cross_entropy(
-                logits.transpose(1, 2), input_ids[:, 1:], reduction="none"
-            )
-            loss = (ce * w).sum() / w.sum().clamp_min(1e-8)
+            logits = model(input_ids=input_ids).logits[:, :-1]
+            loss = weighted_ce(logits, input_ids[:, 1:], w)
             (loss / cfg.micro_batch).backward()
             losses.append(float(loss.detach()))
             step += 1

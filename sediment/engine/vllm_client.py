@@ -32,6 +32,8 @@ _BASE_NAMES = ("base", "v0000")
 class VllmClient:
     def __init__(self, base_url: str, model: str, *, timeout: float = 600.0):
         self.base_url = base_url.rstrip("/")
+        if self.base_url.endswith("/v1"):  # paths below carry /v1 already
+            self.base_url = self.base_url[: -len("/v1")].rstrip("/")
         self.model = model
         self.timeout = timeout
         self._adapters: dict[str, AdapterVersion] = {}

@@ -37,7 +37,7 @@ from sediment.experience import build_block
 from sediment.hindsight import score as hindsight_score
 from sediment.hindsight import to_train_sample
 from sediment.rollout.agent_loop import run_episode
-from sediment.trainer import LORA_TARGET_MODULES, _encode
+from sediment.trainer import LORA_TARGET_MODULES, _encode, weighted_ce
 from sediment.types import AdapterVersion, TrainSample, Trajectory
 
 
@@ -48,6 +48,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--shard", type=int, default=0)
     p.add_argument("--num-shards", type=int, default=1)
     p.add_argument("--pool", type=int, default=200, help="task pool = corpus tail (holdout)")
+    p.add_argument("--pool-skip", type=int, default=0,
+                   help="drop this many tail tasks first (avoid overlap with prior tail pools)")
     p.add_argument("--limit", type=int, default=0, help="max tasks this worker (0 = all)")
     p.add_argument("--data-dir", default="/data/erv1n/resid/data")
     p.add_argument("--lopd-dir", default="/data/erv1n/resid/third_party/LOPD")
@@ -69,6 +71,7 @@ class ResidentTrainer:
         self.cfg = cfg
         self.tokenizer = AutoTokenizer.from_pretrained(cfg.model)
         base = AutoModelForCausalLM.from_pretrained(cfg.model, torch_dtype=torch.bfloat16)
+        base.config.use_cache = False
         lora = LoraConfig(
             r=cfg.lora_r,
             lora_alpha=cfg.lora_alpha,
@@ -76,6 +79,10 @@ class ResidentTrainer:
             task_type="CAUSAL_LM",
         )
         self.model = get_peft_model(base, lora)
+        self.model.enable_input_require_grads()
+        self.model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model.to(self.device)
         self.model.eval()
@@ -104,11 +111,8 @@ class ResidentTrainer:
             input_ids = torch.tensor([ids], device=self.device)
             w = torch.tensor([ws[1:]], dtype=torch.float32, device=self.device)
             for _ in range(cfg.epochs):
-                logits = self.model(input_ids=input_ids).logits[:, :-1].float()
-                ce = torch.nn.functional.cross_entropy(
-                    logits.transpose(1, 2), input_ids[:, 1:], reduction="none"
-                )
-                loss = (ce * w).sum() / w.sum().clamp_min(1e-8)
+                logits = self.model(input_ids=input_ids).logits[:, :-1]
+                loss = weighted_ce(logits, input_ids[:, 1:], w)
                 loss.backward()
                 opt.step()
                 opt.zero_grad(set_to_none=True)
@@ -220,7 +224,10 @@ def main() -> None:
         (run_dir / "config.json").write_text(json.dumps(cfg.to_dict(), indent=2))
 
     tasks = list_tasks("rl", args.data_dir, third_party_dir=args.lopd_dir)
-    pool = tasks[-args.pool :] if args.pool else tasks
+    if args.pool_skip:
+        pool = tasks[-(args.pool + args.pool_skip) : -args.pool_skip]
+    else:
+        pool = tasks[-args.pool :] if args.pool else tasks
     mine = pool[args.shard :: args.num_shards]
     if args.limit:
         mine = mine[: args.limit]
@@ -230,7 +237,9 @@ def main() -> None:
     if out_path.exists():
         for line in out_path.read_text().splitlines():
             if line.strip():
-                done.add(json.loads(line)["task_id"])
+                rec = json.loads(line)
+                if "error" not in rec:  # errored tasks are retried on relaunch
+                    done.add(rec["task_id"])
 
     print(f"[shard {args.shard}/{args.num_shards}] pool={len(pool)} mine={len(mine)} "
           f"done={len(done)} url={args.base_url}", flush=True)
