@@ -77,7 +77,7 @@ def build_engines(cfg: StreamConfig) -> list[Any]:
         cls = getattr(mod, "VllmClient", None) or getattr(mod, "VllmEngine")
         urls = cfg.extra.get("base_urls") or [
             f"http://127.0.0.1:{8000 + i}/v1" for i in range(cfg.num_engines)]
-        return [cls(u) for u in urls]
+        return [cls(u, cfg.model) for u in urls]
     raise SystemExit(f"unknown engine: {cfg.engine}")
 
 

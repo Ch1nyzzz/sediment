@@ -74,7 +74,7 @@ def build_engine(cfg: StreamConfig) -> Any:
 
         mod = importlib.import_module("sediment.engine.vllm_client")
         cls = getattr(mod, "VllmClient", None) or getattr(mod, "VllmEngine")
-        return cls(cfg.extra.get("base_url", "http://127.0.0.1:8000/v1"))
+        return cls(cfg.extra.get("base_url", "http://127.0.0.1:8000/v1"), cfg.model)
     raise SystemExit(f"unknown engine: {cfg.engine}")
 
 

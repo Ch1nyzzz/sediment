@@ -132,3 +132,13 @@ class VllmClient:
             if "already" in str(e).lower():  # idempotent re-load
                 return
             raise
+
+    def unload_adapter(self, name: str) -> None:
+        """Drop a served LoRA (bounds --max-loras in long runs); idempotent."""
+        if name in _BASE_NAMES:
+            return
+        self._adapters.pop(name, None)
+        try:
+            self._post("/v1/unload_lora_adapter", {"lora_name": name})
+        except RuntimeError:
+            pass  # already gone / server without runtime unload
