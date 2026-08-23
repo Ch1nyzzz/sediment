@@ -27,7 +27,13 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from sediment.config import StreamConfig
 from sediment.router import Router
-from sediment.types import StreamRecord, TrainSample, Trajectory, UpdateCandidate
+from sediment.types import (
+    AdapterVersion,
+    StreamRecord,
+    TrainSample,
+    Trajectory,
+    UpdateCandidate,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - sibling modules land separately
     from sediment.buffer import Buffer
@@ -51,6 +57,10 @@ def _make_env(task: dict[str, Any]) -> Any:
         from sediment.envs import ToyOrderEnv
 
         return ToyOrderEnv()
+    if "lopd_dir" in task:  # EnvScaler task dicts carry their checkout path
+        from sediment.envs.envscaler import EnvScalerAdapter
+
+        return EnvScalerAdapter(task["lopd_dir"])
     raise ValueError(f"no env constructor for env_family {family!r}")
 
 
@@ -64,6 +74,7 @@ def run_stream(
     cfg: StreamConfig,
     *,
     run_probe: Optional[RunProbe] = None,
+    probe_tasks: Optional[list[dict[str, Any]]] = None,
     on_window: Optional[OnWindow] = None,
 ) -> list[StreamRecord]:
     """Run the full task stream; return one StreamRecord per task (first attempts).
@@ -74,7 +85,7 @@ def run_stream(
     """
     return asyncio.run(
         _stream(tasks, engines, buffer, gate, trainer_fn, registry, cfg,
-                run_probe=run_probe, on_window=on_window)
+                run_probe=run_probe, probe_tasks=probe_tasks, on_window=on_window)
     )
 
 
@@ -88,6 +99,7 @@ async def _stream(
     cfg: StreamConfig,
     *,
     run_probe: Optional[RunProbe],
+    probe_tasks: Optional[list[dict[str, Any]]] = None,
     on_window: Optional[OnWindow],
 ) -> list[StreamRecord]:
     from sediment import experience as experience_mod
@@ -95,6 +107,7 @@ async def _stream(
     from sediment import merge as merge_mod
     from sediment.rollout.agent_loop import run_episode
 
+    probe_tasks = probe_tasks or []
     router = Router(engines)
     records: list[StreamRecord] = []
     windows = [tasks[i:i + cfg.window_size] for i in range(0, len(tasks), cfg.window_size)]
@@ -160,17 +173,31 @@ async def _stream(
             candidate = await asyncio.to_thread(
                 trainer_fn, samples, current, cfg,
                 workdir=cfg.out_dir + "/candidates")
+            # G2/G3 A/B the candidate on the validating engine.
+            cand_version = AdapterVersion(
+                name=candidate.candidate_id, path=candidate.adapter_path,
+                parent=current.name)
+            engines[0].load_adapter(cand_version)
             decision = await asyncio.to_thread(
                 gate.validate, candidate, current, engines[0],
                 buffer.replay_states(cfg.gate_replay_states, cfg.seed),
-                probe_tasks=[], run_probe=run_probe)
+                probe_tasks=probe_tasks, run_probe=run_probe)
             if decision.passed:
-                merge_mod.merge(current, candidate, cfg, registry)
+                version = merge_mod.merge(current, candidate, cfg, registry)
+                for engine in engines:  # serve the new version from next window
+                    engine.load_adapter(version)
+                if current.path is not None and current.name != version.name:
+                    for engine in engines:  # bound --max-loras in long streams
+                        getattr(engine, "unload_adapter", lambda n: None)(current.name)
                 for rec in contrib:
                     rec.gated_in = True
+            for engine in engines:
+                getattr(engine, "unload_adapter", lambda n: None)(candidate.candidate_id)
+            rec_reason = decision.reason
             train_dt = time.monotonic() - t0
             for rec in contrib:
                 rec.timings["train"] = train_dt
+                rec.meta["gate_reason"] = rec_reason
 
         # (4) snapshot hook.
         if on_window is not None:

@@ -188,7 +188,7 @@ def _install_stubs(monkeypatch) -> None:
                                adapter_path=str(workdir), parent=parent.name)
 
     def run_stream(tasks, engines, buffer, gate, trainer_fn, registry, cfg, *,
-                   run_probe=None, on_window=None):
+                   run_probe=None, probe_tasks=None, on_window=None):
         w = max(1, cfg.window_size)
         records = [StreamRecord(task_id=t["task_id"], window=i // w,
                                 adapter=registry.current().name,

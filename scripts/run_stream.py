@@ -89,10 +89,29 @@ def _on_window(idx: int, records: list[Any]) -> None:
           f"adapter={','.join(adapters)}")
 
 
+def _load_rl_tasks(cfg: StreamConfig) -> tuple[list[dict], list[dict]]:
+    """EnvScaler stream + G3 probe holdout from the corpus tail.
+
+    Pool = tail (num_tasks + gate_probe_tasks); stream gets the head of it,
+    probes the rest. env_family is refined to the env prefix (env_188...) so
+    buffer retrieval and the gate ledger see real families; each task carries
+    its LOPD checkout for scheduler._make_env.
+    """
+    from sediment.envs.envscaler import list_tasks
+
+    lopd = cfg.extra.get("lopd_dir", "/data/erv1n/resid/third_party/LOPD")
+    pool = list_tasks("rl", cfg.data_dir, third_party_dir=lopd)[
+        -(cfg.num_tasks + cfg.gate_probe_tasks):]
+    for t in pool:
+        t["lopd_dir"] = lopd
+        t["env_family"] = t["task_id"].rsplit("_rl-task_", 1)[0]
+    return pool[: cfg.num_tasks], pool[cfg.num_tasks:]
+
+
 def main(argv: Optional[list[str]] = None) -> dict[str, Any]:
     cfg = parse_args(argv)
-    if cfg.split != "toy":
-        raise SystemExit("run_stream currently builds toy tasks only (split='toy')")
+    if cfg.split not in ("toy", "rl"):
+        raise SystemExit("run_stream supports split='toy' or split='rl' (EnvScaler)")
     run_dir = Path(cfg.out_dir) / cfg.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     # Isolate mutable run state under the run dir unless explicitly overridden.
@@ -112,14 +131,36 @@ def main(argv: Optional[list[str]] = None) -> dict[str, Any]:
     except ImportError:
         from sediment.envs.toy import make_toy_tasks
 
-    tasks = make_toy_tasks(cfg.num_tasks, cfg.seed)
+    run_probe = None
+    probe_tasks: list[dict] = []
+    if cfg.split == "toy":
+        tasks = make_toy_tasks(cfg.num_tasks, cfg.seed)
+    else:
+        tasks, probe_tasks = _load_rl_tasks(cfg)
     engines = build_engines(cfg)
     buffer = Buffer(cfg.buffer_path)
     gate = Gate(cfg)
     registry = Registry(cfg.registry_dir)
 
+    if probe_tasks:
+        import dataclasses
+
+        from sediment.rollout.agent_loop import run_episode
+        from sediment.scheduler import _make_env
+
+        probe_cfg = dataclasses.replace(cfg, temperature=0.0)
+
+        def run_probe(adapter_name: str, ptasks: list[dict]) -> float:
+            ok = 0
+            for t in ptasks:
+                traj = run_episode(engines[0], _make_env(t), t, probe_cfg,
+                                   adapter=adapter_name)
+                ok += int(bool(traj.success))
+            return ok / max(1, len(ptasks))
+
     records = stream_fn(tasks, engines, buffer, gate, train_candidate, registry,
-                        cfg, on_window=_on_window)
+                        cfg, run_probe=run_probe, probe_tasks=probe_tasks,
+                        on_window=_on_window)
     if asyncio.iscoroutine(records):
         records = asyncio.run(records)
 
