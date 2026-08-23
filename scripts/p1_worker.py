@@ -286,12 +286,17 @@ def run_task(
     rec["act_mode"] = act
     rec["n_supervised"] = sum(1 for ws in sample.token_weights_by_msg for w in ws if w > 0)
 
+    def probe_result(key, fn):  # a probe failure must not kill the whole record
+        try:
+            return episode_result(timed(key, fn))
+        except Exception as e:
+            return {"error": repr(e)[:160]}
+
     if probe_task is not None:  # near-transfer: same env family, different instance
         rec["probe"] = {"task_id": probe_task["task_id"]}
-        rec["probe"]["base"] = episode_result(
-            timed("probe_base", lambda: roll(on=probe_task)))
-        rec["probe"]["icl"] = episode_result(  # cross-task ICL with task-A's block
-            timed("probe_icl", lambda: roll(on=probe_task, experience=block)))
+        rec["probe"]["base"] = probe_result("probe_base", lambda: roll(on=probe_task))
+        rec["probe"]["icl"] = probe_result(  # cross-task ICL with task-A's block
+            "probe_icl", lambda: roll(on=probe_task, experience=block))
 
     for arm, s in (("ours", sample), ("uniform", uni)):
         name = f"{tag}-{sanitize(task['task_id'])}-{arm}"
@@ -302,8 +307,8 @@ def run_task(
         rec[arm] = episode_result(res)
         rec[arm]["losses"] = [round(x, 4) for x in losses]
         if probe_task is not None:
-            rec["probe"][arm] = episode_result(
-                timed(f"probe_{arm}", lambda name=name: roll(on=probe_task, adapter=name)))
+            rec["probe"][arm] = probe_result(
+                f"probe_{arm}", lambda name=name: roll(on=probe_task, adapter=name))
         engine.unload_adapter(name)
 
     rec["timings"] = timings

@@ -12,6 +12,7 @@ POST /v1/load_lora_adapter (server must allow runtime LoRA updating).
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 
@@ -27,15 +28,19 @@ SERVER_CMD = (
 )
 
 _BASE_NAMES = ("base", "v0000")
+_CTX_OVERFLOW_RE = re.compile(r"contains at least (\d+) input tokens")
 
 
 class VllmClient:
-    def __init__(self, base_url: str, model: str, *, timeout: float = 600.0):
+    def __init__(
+        self, base_url: str, model: str, *, timeout: float = 600.0, max_context: int = 12288
+    ):
         self.base_url = base_url.rstrip("/")
         if self.base_url.endswith("/v1"):  # paths below carry /v1 already
             self.base_url = self.base_url[: -len("/v1")].rstrip("/")
         self.model = model
         self.timeout = timeout
+        self.max_context = max_context
         self._adapters: dict[str, AdapterVersion] = {}
 
     # -- http -------------------------------------------------------------
@@ -74,15 +79,22 @@ class VllmClient:
         temperature: float = 0.7,
         max_tokens: int = 2048,
     ) -> str:
-        data = self._post(
-            "/v1/chat/completions",
-            {
-                "model": self._model_name(adapter),
-                "messages": [m.to_dict() for m in messages],
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
-        )
+        payload = {
+            "model": self._model_name(adapter),
+            "messages": [m.to_dict() for m in messages],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        try:
+            data = self._post("/v1/chat/completions", payload)
+        except RuntimeError as e:
+            m = _CTX_OVERFLOW_RE.search(str(e))
+            if m is None or "maximum context length" not in str(e):
+                raise
+            budget = self.max_context - int(m.group(1)) - 16
+            if budget < 32:  # context exhausted: end the turn, env will settle
+                return ""
+            data = self._post("/v1/chat/completions", {**payload, "max_tokens": budget})
         return data["choices"][0]["message"]["content"] or ""
 
     def _prompt_logprobs(self, messages: list[Message], adapter: str) -> list[float]:
