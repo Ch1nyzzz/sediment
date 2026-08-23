@@ -70,6 +70,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--act-mode", choices=["mask", "gated", "raw"], default="mask",
                    help="action channel in steps mode: mask=belief-only (v1), "
                         "gated=P1.6 status-gated relu (v2), raw=unmasked")
+    p.add_argument("--probe", choices=["none", "next"], default="none",
+                   help="near-transfer probe: next=after training on task A, also "
+                        "evaluate base/icl/ours/uniform on the NEXT task of the same "
+                        "env family (kills same-task memorization artifacts)")
     return p.parse_args()
 
 
@@ -232,13 +236,14 @@ def run_task(
     run_dir: Path,
     tag: str,
     traj_f=None,
+    probe_task: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     lopd = cfg.extra["lopd_dir"]
     timings: dict[str, float] = {}
 
-    def roll(adapter: str = "base", experience=None) -> Trajectory:
+    def roll(adapter: str = "base", experience=None, on=None) -> Trajectory:
         env = EnvScalerAdapter(lopd, max_steps=cfg.max_steps)
-        return run_episode(engine, env, task, cfg, adapter=adapter, experience=experience)
+        return run_episode(engine, env, on or task, cfg, adapter=adapter, experience=experience)
 
     def timed(key: str, fn):
         t = time.time()
@@ -281,15 +286,25 @@ def run_task(
     rec["act_mode"] = act
     rec["n_supervised"] = sum(1 for ws in sample.token_weights_by_msg for w in ws if w > 0)
 
+    if probe_task is not None:  # near-transfer: same env family, different instance
+        rec["probe"] = {"task_id": probe_task["task_id"]}
+        rec["probe"]["base"] = episode_result(
+            timed("probe_base", lambda: roll(on=probe_task)))
+        rec["probe"]["icl"] = episode_result(  # cross-task ICL with task-A's block
+            timed("probe_icl", lambda: roll(on=probe_task, experience=block)))
+
     for arm, s in (("ours", sample), ("uniform", uni)):
         name = f"{tag}-{sanitize(task['task_id'])}-{arm}"
         adir = run_dir / "candidates" / name
         losses = timed(f"{arm}_train", lambda s=s, adir=adir: trainer.train(s, str(adir)))
         engine.load_adapter(AdapterVersion(name=name, path=str(adir), parent="v0000"))
         res = timed(arm, lambda name=name: roll(adapter=name))
-        engine.unload_adapter(name)
         rec[arm] = episode_result(res)
         rec[arm]["losses"] = [round(x, 4) for x in losses]
+        if probe_task is not None:
+            rec["probe"][arm] = episode_result(
+                timed(f"probe_{arm}", lambda name=name: roll(on=probe_task, adapter=name)))
+        engine.unload_adapter(name)
 
     rec["timings"] = timings
     return rec
@@ -330,6 +345,17 @@ def main() -> None:
     if args.limit:
         mine = mine[: args.limit]
 
+    probe_map: dict[str, Optional[dict[str, Any]]] = {}
+    if args.probe == "next":  # pair each task with the next one of its env family
+        fam: dict[str, list] = {}
+        for t in pool:
+            fam.setdefault(t["task_id"].rsplit("_rl-task_", 1)[0], []).append(t)
+        for members in fam.values():
+            for i, t in enumerate(members):
+                probe_map[t["task_id"]] = (
+                    members[(i + 1) % len(members)] if len(members) > 1 else None
+                )
+
     out_path = run_dir / f"p1_shard{args.shard}.jsonl"
     done: set[str] = set()
     if out_path.exists():
@@ -352,7 +378,8 @@ def main() -> None:
                 continue
             t0 = time.time()
             try:
-                rec = run_task(task, engine, trainer, cfg, run_dir, args.tag, traj_f=tf)
+                rec = run_task(task, engine, trainer, cfg, run_dir, args.tag,
+                               traj_f=tf, probe_task=probe_map.get(task["task_id"]))
             except Exception as e:  # record and move on; relaunch skips it
                 rec = {
                     "task_id": task["task_id"],
