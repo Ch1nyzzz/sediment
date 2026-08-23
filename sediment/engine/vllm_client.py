@@ -88,13 +88,27 @@ class VllmClient:
         try:
             data = self._post("/v1/chat/completions", payload)
         except RuntimeError as e:
-            m = _CTX_OVERFLOW_RE.search(str(e))
-            if m is None or "maximum context length" not in str(e):
-                raise
-            budget = self.max_context - int(m.group(1)) - 16
-            if budget < 32:  # context exhausted: end the turn, env will settle
+            # vLLM's reported input_tokens is a LOWER bound ("at least N"):
+            # retry with an escalating safety margin, then yield the turn.
+            data = None
+            margin = 64
+            for _ in range(3):
+                m = _CTX_OVERFLOW_RE.search(str(e))
+                if m is None or "maximum context length" not in str(e):
+                    raise
+                budget = self.max_context - int(m.group(1)) - margin
+                if budget < 32:  # context exhausted: end the turn, env settles
+                    return ""
+                try:
+                    data = self._post(
+                        "/v1/chat/completions", {**payload, "max_tokens": budget}
+                    )
+                    break
+                except RuntimeError as e2:
+                    e = e2
+                    margin *= 4
+            if data is None:
                 return ""
-            data = self._post("/v1/chat/completions", {**payload, "max_tokens": budget})
         return data["choices"][0]["message"]["content"] or ""
 
     def _prompt_logprobs(self, messages: list[Message], adapter: str) -> list[float]:
