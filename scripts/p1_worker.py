@@ -67,6 +67,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tag", default="s0", help="run tag (e.g. seed label)")
     p.add_argument("--block-mode", choices=["outcome", "steps"], default="outcome",
                    help="E_x completeness: outcome-only (v0) or settled step summary (v1)")
+    p.add_argument("--act-mode", choices=["mask", "gated", "raw"], default="mask",
+                   help="action channel in steps mode: mask=belief-only (v1), "
+                        "gated=P1.6 status-gated relu (v2), raw=unmasked")
     return p.parse_args()
 
 
@@ -182,6 +185,23 @@ def zero_action_weights(sample: TrainSample) -> TrainSample:
     return TrainSample(sample.task_id, list(sample.messages), ws)
 
 
+def gate_action_weights(sample: TrainSample) -> TrainSample:
+    """P1.6 status-gated action channel: keep relu weights on ok-step actions,
+    zero ERROR-step actions (measured: raw relu would reinforce 32.7% of
+    known-bad spans). Belief (tool) channel untouched."""
+    msgs = sample.messages
+    ws = [list(w) for w in sample.token_weights_by_msg]
+    for i, m in enumerate(msgs):
+        if m.role != "assistant" or not ws[i]:
+            continue
+        nxt = msgs[i + 1] if i + 1 < len(msgs) else None
+        bad = (nxt is not None and nxt.role in ("tool", "user")
+               and STATUS_RE.search(nxt.content[:300]))
+        if bad:
+            ws[i] = [0.0] * len(ws[i])
+    return TrainSample(sample.task_id, list(msgs), ws)
+
+
 def uniform_sample(sample: TrainSample) -> TrainSample:
     """Same token support as the weighted sample, every supervised weight = 1."""
     return TrainSample(
@@ -253,9 +273,12 @@ def run_task(
         traj_f.flush()
     sample = to_train_sample(first, hr, cfg)
     uni = uniform_sample(sample)
-    if mode == "steps":  # belief channel only: actions are verbatim in the block
-        sample = zero_action_weights(sample)
-        uni = zero_action_weights(uni)
+    act = cfg.extra.get("act_mode", "mask")
+    if mode == "steps" and act == "mask":
+        sample, uni = zero_action_weights(sample), zero_action_weights(uni)
+    elif mode == "steps" and act == "gated":
+        sample, uni = gate_action_weights(sample), gate_action_weights(uni)
+    rec["act_mode"] = act
     rec["n_supervised"] = sum(1 for ws in sample.token_weights_by_msg for w in ws if w > 0)
 
     for arm, s in (("ours", sample), ("uniform", uni)):
@@ -293,7 +316,7 @@ def main() -> None:
         out_dir=str(run_dir),
         run_id=args.tag,
         extra={"lopd_dir": args.lopd_dir, "base_url": args.base_url,
-               "block_mode": args.block_mode},
+               "block_mode": args.block_mode, "act_mode": args.act_mode},
     )
     if args.shard == 0:
         (run_dir / "config.json").write_text(json.dumps(cfg.to_dict(), indent=2))
