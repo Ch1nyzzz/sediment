@@ -64,6 +64,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lopd-dir", default="/data/erv1n/resid/third_party/LOPD")
     p.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507")
     p.add_argument("--epochs", type=int, default=2)
+    p.add_argument("--lr", type=float, default=5e-5)
+    p.add_argument("--lora-alpha", type=int, default=16)
     p.add_argument("--tag", default="s0", help="run tag (e.g. seed label)")
     p.add_argument("--block-mode", choices=["outcome", "steps"], default="outcome",
                    help="E_x completeness: outcome-only (v0) or settled step summary (v1)")
@@ -328,8 +330,8 @@ def main() -> None:
         max_tokens=2048,
         max_steps=30,
         lora_r=32,
-        lora_alpha=16,
-        lr=5e-5,
+        lora_alpha=args.lora_alpha,
+        lr=args.lr,
         max_seq_len=12288,
         data_dir=args.data_dir,
         split="rl",
