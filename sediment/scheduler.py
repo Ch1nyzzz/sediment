@@ -200,6 +200,8 @@ async def _stream(
             for engine in engines:
                 getattr(engine, "unload_adapter", lambda n: None)(candidate.candidate_id)
             rec_reason = decision.reason
+            print(f"[gate w{w_idx}] {'PASS' if decision.passed else 'REJECT'}: "
+                  f"{rec_reason}", flush=True)
             train_dt = time.monotonic() - t0
             for rec in contrib:
                 rec.timings["train"] = train_dt
