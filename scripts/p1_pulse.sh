@@ -16,4 +16,5 @@ if [ -f results/p3smoke.pid ]; then
 fi
 p3w=$(grep -c "^\[window" results/p3smoke.log 2>/dev/null | head -1)
 naw=$(grep -c "^\[window" results/p3noadapt.log 2>/dev/null | head -1)
-echo "PULSE driver=$d workers=$w rec=$total err=$errs gpu=[$gpu] p3=$p3 p3w=${p3w:-0} na=${naw:-0} stage=[$stage]"
+ngw=$(grep -c "^\[window" results/p3nogate.log 2>/dev/null | head -1)
+echo "PULSE driver=$d workers=$w rec=$total err=$errs gpu=[$gpu] p3=$p3 p3w=${p3w:-0} na=${naw:-0} ng=${ngw:-0} stage=[$stage]"
