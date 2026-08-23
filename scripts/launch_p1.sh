@@ -12,6 +12,7 @@ MODEL=${MODEL:-Qwen/Qwen3-4B-Instruct-2507}
 GPUS=(${GPUS:-4 5 6 7})
 NW=${#GPUS[@]}
 RUN_ID=${RUN_ID:-p1_dev}
+WORKER_SCRIPT=${WORKER_SCRIPT:-p1_worker.py}
 OUT=$SED/results/$RUN_ID
 SRVDIR=$SED/results/servers  # vLLM servers are shared across runs/seeds
 PORT0=${PORT0:-8104}
@@ -64,7 +65,7 @@ for i in "${!GPUS[@]}"; do
     echo "worker gpu$gpu already running (pid $(cat "$OUT/worker_$gpu.pid"))"
     continue
   fi
-  CUDA_VISIBLE_DEVICES=$gpu nohup "$TRAIN_PY" "$SED/scripts/p1_worker.py" \
+  CUDA_VISIBLE_DEVICES=$gpu nohup "$TRAIN_PY" "$SED/scripts/$WORKER_SCRIPT" \
     --base-url "http://127.0.0.1:$port/v1" --out "$OUT" \
     --shard "$i" --num-shards "$NW" --tag "$RUN_ID" $WORKER_ARGS \
     > "$OUT/worker_$gpu.log" 2>&1 &
