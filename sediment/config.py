@@ -41,6 +41,8 @@ class StreamConfig:
 
     # trainer
     trainer: str = "stub"  # "stub" | "torch"
+    max_candidate_samples: int = 64  # top-K by surprise per window candidate
+    # (dose control: total steps per merge = K * epochs; P1.7 knee ~2-4 steps)
     lora_r: int = 32
     lora_alpha: int = 16
     lr: float = 5e-5

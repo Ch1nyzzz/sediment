@@ -170,14 +170,22 @@ async def _stream(
                 rec.timings["retry"] = retry_dt
                 buffer.add(retry_traj)
             if proposed:
-                samples.append(hindsight_mod.to_train_sample(traj, hr, cfg))
+                samples.append((hr.obs_surprise, hindsight_mod.to_train_sample(traj, hr, cfg)))
                 contrib.append(rec)
 
         # (3) train candidate from proposed tasks; gate-validate; merge/publish.
         if samples:
             t0 = time.monotonic()
+            # Dose control: total steps per merge = n_samples * epochs. Keep the
+            # highest-surprise K (P1.7: update magnitude past the knee wrecks
+            # retention; stream candidates must not multiply the dose by n).
+            samples.sort(key=lambda p: p[0], reverse=True)
+            kept = [s for _, s in samples[: cfg.max_candidate_samples]]
+            if len(samples) > len(kept):
+                print(f"[dose w{w_idx}] {len(samples)} proposals -> top {len(kept)} "
+                      f"by surprise", flush=True)
             candidate = await asyncio.to_thread(
-                trainer_fn, samples, current, cfg,
+                trainer_fn, kept, current, cfg,
                 workdir=cfg.out_dir + "/candidates")
             # G2/G3 A/B the candidate on the validating engine.
             cand_version = AdapterVersion(
