@@ -29,6 +29,7 @@ class StreamConfig:
 
     # experience block
     max_result_chars: int = 200
+    max_block_chars: int = 4000  # total block budget; peers are dropped past it
 
     # gate
     gate_min_surprise: float = 0.05  # G1 magnitude threshold on obs_surprise

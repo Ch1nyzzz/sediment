@@ -77,17 +77,26 @@ def build_block(
     if not retrieved and own is None:
         return ExperienceBlock(text="")
 
+    budget = getattr(cfg, "max_block_chars", 4000)
     lines = [EXPERIENCE_OPEN, HEADER, ""]
+    size = sum(len(x) + 1 for x in lines)
+    kept: list[Trajectory] = []
     for k, traj in enumerate(retrieved, 1):
         ok, r = _outcome(traj)
         tag = "SUCCESS" if ok else "FAILED"
-        lines.append(f"Attempt {k} — {tag} (r={r})")
+        seg = [f"Attempt {k} — {tag} (r={r})"]
         for n, (action, result) in enumerate(_steps(traj), 1):
-            lines.append(
+            seg.append(
                 f"  {n}. {_truncate(action, cfg.max_result_chars)} -> "
                 f"{_truncate(result, cfg.max_result_chars)}"
             )
-        lines.append("")
+        seg.append("")
+        seg_size = sum(len(x) + 1 for x in seg)
+        if kept and size + seg_size > budget:  # keep at least one peer
+            break
+        lines.extend(seg)
+        size += seg_size
+        kept.append(traj)
     if own is not None:
         ok, r = _outcome(own)
         tag = "SUCCEEDED" if ok else "FAILED"
@@ -101,7 +110,7 @@ def build_block(
     lines.append(EXPERIENCE_CLOSE)
     return ExperienceBlock(
         text="\n".join(lines),
-        source_task_ids=[t.task_id for t in retrieved],
+        source_task_ids=[t.task_id for t in kept],
         includes_own_outcome=own is not None,
     )
 

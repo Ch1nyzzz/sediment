@@ -152,7 +152,13 @@ async def _stream(
             block = experience_mod.build_block(retrieved, traj, cfg)
             engine = router.for_task(rec.task_id)
             t0 = time.monotonic()
-            hr = await asyncio.to_thread(hindsight_mod.score, engine, traj, block, cfg)
+            try:
+                hr = await asyncio.to_thread(hindsight_mod.score, engine, traj, block, cfg)
+            except Exception as e:  # oversized rendering etc.: no signal, stream goes on
+                rec.timings["hindsight"] = time.monotonic() - t0
+                rec.meta["hindsight_error"] = repr(e)[:160]
+                buffer.add(traj)
+                continue
             rec.timings["hindsight"] = time.monotonic() - t0
             proposed = bool(gate.propose(hr, traj))
             rec.meta["proposed"] = proposed
