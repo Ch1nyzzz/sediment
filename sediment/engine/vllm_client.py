@@ -16,6 +16,7 @@ import re
 import urllib.error
 import urllib.request
 
+from sediment.chat_template import template_kwargs
 from sediment.types import AdapterVersion, Message
 
 # Documented launch command (out of scope to run); runtime LoRA loading
@@ -29,6 +30,14 @@ SERVER_CMD = (
 
 _BASE_NAMES = ("base", "v0000")
 _CTX_OVERFLOW_RE = re.compile(r"contains at least (\d+) input tokens")
+# We render hybrid bases with the no-think template, whose generation prompt
+# ends at "<|im_start|>assistant\n" -- nothing forecloses thinking, so the model
+# may still open a <think> block on its own. Strip it: the env must see the tool
+# call, and the stripped text is what gets stored, scored and trained on (so
+# engine and trainer stay consistent). self.n_think counts occurrences -- a high
+# rate means switching to a generation prompt that carries the empty block.
+_THINK_RE = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL)
+_THINK_OPEN = re.compile(r"^\s*<think>", re.DOTALL)
 
 
 class VllmClient:
@@ -41,6 +50,11 @@ class VllmClient:
         self.model = model
         self.timeout = timeout
         self.max_context = max_context
+        # hybrid-reasoning bases need enable_thinking=False; the trainer derives
+        # the same kwargs from its tokenizer so both renderings agree
+        self.template_kwargs = template_kwargs(model)
+        self.n_think = 0  # generations that opened a <think> block anyway
+        self.n_think_unclosed = 0  # ... and spent the whole budget inside it
         self._adapters: dict[str, AdapterVersion] = {}
 
     # -- http -------------------------------------------------------------
@@ -85,6 +99,8 @@ class VllmClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if self.template_kwargs:
+            payload["chat_template_kwargs"] = self.template_kwargs
         try:
             data = self._post("/v1/chat/completions", payload)
         except RuntimeError as e:
@@ -109,21 +125,31 @@ class VllmClient:
                     margin *= 4
             if data is None:
                 return ""
-        return data["choices"][0]["message"]["content"] or ""
+        return self._strip_think(data["choices"][0]["message"]["content"] or "")
+
+    def _strip_think(self, text: str) -> str:
+        """Drop a leading self-initiated <think>...</think> segment (see above)."""
+        if not _THINK_OPEN.match(text):
+            return text
+        self.n_think += 1
+        if "</think>" not in text:  # never closed: the whole budget went to it
+            self.n_think_unclosed += 1
+            return ""  # yield the turn, the env settles it
+        return _THINK_RE.sub("", text, count=1)
 
     def _prompt_logprobs(self, messages: list[Message], adapter: str) -> list[float]:
         """Per-token logprobs of the rendered prompt (0.0 at position 0)."""
-        data = self._post(
-            "/v1/chat/completions",
-            {
-                "model": self._model_name(adapter),
-                "messages": [m.to_dict() for m in messages],
-                "temperature": 0.0,
-                "max_tokens": 1,
-                "prompt_logprobs": 0,  # vLLM extra body: actual token only
-                "add_generation_prompt": False,  # score exactly the rendering
-            },
-        )
+        payload = {
+            "model": self._model_name(adapter),
+            "messages": [m.to_dict() for m in messages],
+            "temperature": 0.0,
+            "max_tokens": 1,
+            "prompt_logprobs": 0,  # vLLM extra body: actual token only
+            "add_generation_prompt": False,  # score exactly the rendering
+        }
+        if self.template_kwargs:
+            payload["chat_template_kwargs"] = self.template_kwargs
+        data = self._post("/v1/chat/completions", payload)
         logps: list[float] = []
         for entry in data.get("prompt_logprobs") or []:
             if not entry:  # first position has no logprob

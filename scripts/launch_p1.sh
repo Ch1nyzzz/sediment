@@ -28,8 +28,31 @@ export VLLM_ATTENTION_BACKEND=${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}
 
 alive() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
 
+# hybrid-reasoning bases (Qwen3-8B, ...) must render with the no-think template
+# on BOTH sides, or the trainer's per-token weight alignment breaks; see
+# sediment/chat_template.py.
+CHAT_TMPL=$("$TRAIN_PY" -c "
+import sys; sys.path.insert(0, '$SED')
+from sediment.chat_template import NOTHINK_TEMPLATE, override_template
+print(NOTHINK_TEMPLATE if override_template('$MODEL') else '')" 2>/dev/null)
+SERVE_EXTRA=()
+if [ -n "$CHAT_TMPL" ]; then
+  SERVE_EXTRA=(--chat-template "$CHAT_TMPL")
+  echo "hybrid base: serving with no-think template $CHAT_TMPL"
+fi
+
 for i in "${!GPUS[@]}"; do
   gpu=${GPUS[$i]}; port=$((PORT0 + i))
+  # servers are shared across runs: a live one serving a DIFFERENT model (or a
+  # different template) must be replaced, not silently reused
+  want="$MODEL|$CHAT_TMPL"
+  have=$(cat "$SRVDIR/vllm_$gpu.serving" 2>/dev/null || true)
+  if alive "$SRVDIR/vllm_$gpu.pid" && [ "$have" != "$want" ]; then
+    echo "vllm gpu$gpu serves '$have', need '$want' -> restarting"
+    kill "$(cat "$SRVDIR/vllm_$gpu.pid")" 2>/dev/null
+    for _ in $(seq 1 60); do alive "$SRVDIR/vllm_$gpu.pid" || break; sleep 2; done
+    rm -f "$SRVDIR/vllm_$gpu.pid"
+  fi
   if alive "$SRVDIR/vllm_$gpu.pid"; then
     echo "vllm gpu$gpu already running (pid $(cat "$SRVDIR/vllm_$gpu.pid"))"
   else
@@ -37,9 +60,11 @@ for i in "${!GPUS[@]}"; do
       --model "$MODEL" --host 127.0.0.1 --port "$port" \
       --enable-lora --max-lora-rank 32 --max-loras 4 \
       --enable-prefix-caching --max-model-len 12288 \
-      --gpu-memory-utilization 0.40 \
+      --gpu-memory-utilization "${UTIL:-0.40}" \
+      "${SERVE_EXTRA[@]}" \
       > "$SRVDIR/vllm_$gpu.log" 2>&1 &
     echo $! > "$SRVDIR/vllm_$gpu.pid"
+    echo "$MODEL|$CHAT_TMPL" > "$SRVDIR/vllm_$gpu.serving"
     echo "vllm gpu$gpu -> port $port (pid $!)"
   fi
 done

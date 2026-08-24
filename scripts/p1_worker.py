@@ -85,11 +85,14 @@ class ResidentTrainer:
     def __init__(self, cfg: StreamConfig):
         import torch
         from peft import LoraConfig, get_peft_model
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoModelForCausalLM
+
+        from sediment.chat_template import load_tokenizer
 
         self.torch = torch
         self.cfg = cfg
-        self.tokenizer = AutoTokenizer.from_pretrained(cfg.model)
+        # carries the no-think template for hybrid bases (prefix property)
+        self.tokenizer = load_tokenizer(cfg.model)
         base = AutoModelForCausalLM.from_pretrained(cfg.model, torch_dtype=torch.bfloat16)
         base.config.use_cache = False
         lora = LoraConfig(

@@ -8,3 +8,7 @@ data/
 third_party/
 *.egg-info/
 .DS_Store
+
+# Keep full experiment evidence local. Publish only aggregate reports/configs.
+loops/**/artifacts/**/*.jsonl
+loops/**/artifacts/**/worker_*.log

@@ -11,6 +11,7 @@ import json
 import os
 from typing import Any
 
+from .chat_template import load_tokenizer
 from .config import StreamConfig
 from .types import AdapterVersion, TrainSample, UpdateCandidate
 
@@ -96,6 +97,7 @@ def _encode(tokenizer, sample: TrainSample, max_seq_len: int) -> tuple[list[int]
     weights: list[float] = []
     for i in range(1, len(msgs) + 1):
         # return_dict=False: transformers 5.x defaults to a BatchEncoding here
+        # the tokenizer carries the right template (sediment.chat_template)
         toks = list(tokenizer.apply_chat_template(msgs[:i], tokenize=True, return_dict=False))
         if toks[: len(prev)] != prev:
             raise AssertionError(
@@ -140,9 +142,9 @@ def _train_torch(
     """LoRA fine-tune with per-token weighted CE; returns per-step losses."""
     import torch
     from peft import LoraConfig, PeftModel, get_peft_model
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM
 
-    tokenizer = AutoTokenizer.from_pretrained(cfg.model)
+    tokenizer = load_tokenizer(cfg.model)
     model = AutoModelForCausalLM.from_pretrained(cfg.model, torch_dtype=torch.bfloat16)
     if parent.path is not None:
         model = PeftModel.from_pretrained(model, parent.path, is_trainable=True)

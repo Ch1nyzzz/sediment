@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -32,6 +32,7 @@ class StreamConfig:
     max_block_chars: int = 4000  # total block budget; peers are dropped past it
 
     # gate
+    gate_validate: bool = True  # False: skip G2/G3 measurement entirely (always pass)
     gate_min_surprise: float = 0.05  # G1 magnitude threshold on obs_surprise
     gate_recurrence: int = 2  # ledger: distinct tasks with similar surprise before write
     gate_replay_states: int = 8  # G2: replayed decision points per candidate
