@@ -106,6 +106,8 @@ async def _stream(
     from sediment import hindsight as hindsight_mod
     from sediment import merge as merge_mod
     from sediment.rollout.agent_loop import run_episode
+    if cfg.reflect:
+        from sediment.reflect import reflect as reflect_fn
 
     probe_tasks = probe_tasks or []
     router = Router(engines)
@@ -130,8 +132,12 @@ async def _stream(
         current = registry.current()
         serving = current.name
 
-        # (1) first attempts, concurrent; results in task order.
-        results = await asyncio.gather(*(attempt(t, serving) for t in window))
+        # (1) first attempts, concurrent; results in task order. ICL arm:
+        # retrieval happens before this window's trajectories enter the buffer.
+        served = [experience_mod.build_block(buffer.retrieve(t, cfg.retrieval_k), None, cfg)
+                  if cfg.serve_experience else None for t in window]
+        results = await asyncio.gather(*(attempt(t, serving, experience=e)
+                                         for t, e in zip(window, served)))
         w_records: list[StreamRecord] = []
         trajs: list[Trajectory] = []
         for task, (traj, dt) in zip(window, results):
@@ -140,7 +146,9 @@ async def _stream(
                 task_id=task["task_id"], window=w_idx, adapter=serving,
                 success=traj.success, reward=traj.reward,
                 timings={"attempt": dt},
-                meta={"env_family": task.get("env_family", "")},
+                meta={"env_family": task.get("env_family", ""),
+                      "served_experience": sorted(traj.meta.get("experience_source_task_ids", []))
+                      if cfg.serve_experience else []},
             ))
         records.extend(w_records)
 
@@ -148,9 +156,14 @@ async def _stream(
         samples: list[TrainSample] = []
         contrib: list[StreamRecord] = []
         for task, rec, traj in zip(window, w_records, trajs):
+            engine = router.for_task(rec.task_id)
+            if cfg.reflect:  # before buffer.add so peers retrieve it later
+                t0 = time.monotonic()
+                traj.meta["reflection"] = await asyncio.to_thread(
+                    reflect_fn, engine, traj, cfg, adapter=serving)
+                rec.timings["reflect"] = time.monotonic() - t0
             retrieved = buffer.retrieve(task, cfg.retrieval_k)
             block = experience_mod.build_block(retrieved, traj, cfg)
-            engine = router.for_task(rec.task_id)
             t0 = time.monotonic()
             try:
                 hr = await asyncio.to_thread(hindsight_mod.score, engine, traj, block, cfg)

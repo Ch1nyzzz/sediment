@@ -182,3 +182,69 @@ def test_vllm_load_adapter_already_loaded_is_ok():
     client._post = hard_fail  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="boom"):
         client.load_adapter(AdapterVersion(name="v0003", path="/ckpt/v0003", parent="v0002"))
+
+
+def test_lora_prefix_namespaces_served_adapters(monkeypatch):
+    from sediment.types import AdapterVersion
+    client = VllmClient("http://localhost:8000/", "qwen-base", lora_prefix="runA-")
+    posted = []
+    monkeypatch.setattr(client, "_post", lambda path, body: posted.append((path, body)))
+    client.load_adapter(AdapterVersion("v0001", "/tmp/a", "v0000"))
+    assert posted == [("/v1/load_lora_adapter", {"lora_name": "runA-v0001", "lora_path": "/tmp/a"})]
+    assert client._model_name("v0001") == "runA-v0001"
+    assert client._model_name("base") == "qwen-base"
+    client.unload_adapter("v0001")
+    assert posted[-1] == ("/v1/unload_lora_adapter", {"lora_name": "runA-v0001"})
+
+
+def test_post_retries_transient_timeouts(monkeypatch):
+    import urllib.request
+    client = VllmClient("http://localhost:8000/", "m")
+    calls = {"n": 0}
+
+    class Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"ok": true}'
+
+    def fake_urlopen(req, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise TimeoutError("timed out")
+        return Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("sediment.engine.vllm_client.time.sleep", lambda s: None)
+    assert client._post("/v1/x", {}) == {"ok": True}
+    assert calls["n"] == 3
+
+
+def test_post_retries_5xx_but_not_4xx(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+    client = VllmClient("http://localhost:8000/", "m")
+    monkeypatch.setattr("sediment.engine.vllm_client.time.sleep", lambda s: None)
+    codes = iter([500, 503])
+
+    class Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"ok": true}'
+
+    def fake(req, timeout=None):
+        try:
+            code = next(codes)
+        except StopIteration:
+            return Resp()
+        raise urllib.error.HTTPError(req.full_url, code, "err", {}, io.BytesIO(b"x"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    assert client._post("/v1/x", {}) == {"ok": True}
+
+    def fake404(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 404, "nf", {}, io.BytesIO(b"x"))
+    monkeypatch.setattr(urllib.request, "urlopen", fake404)
+    import pytest
+    with pytest.raises(RuntimeError):
+        client._post("/v1/x", {})

@@ -12,6 +12,8 @@ POST /v1/load_lora_adapter (server must allow runtime LoRA updating).
 from __future__ import annotations
 
 import json
+import socket
+import time
 import re
 import urllib.error
 import urllib.request
@@ -42,7 +44,8 @@ _THINK_OPEN = re.compile(r"^\s*<think>", re.DOTALL)
 
 class VllmClient:
     def __init__(
-        self, base_url: str, model: str, *, timeout: float = 600.0, max_context: int = 12288
+        self, base_url: str, model: str, *, timeout: float = 600.0, max_context: int = 12288,
+        lora_prefix: str = "",
     ):
         self.base_url = base_url.rstrip("/")
         if self.base_url.endswith("/v1"):  # paths below carry /v1 already
@@ -56,6 +59,10 @@ class VllmClient:
         self.n_think = 0  # generations that opened a <think> block anyway
         self.n_think_unclosed = 0  # ... and spent the whole budget inside it
         self._adapters: dict[str, AdapterVersion] = {}
+        # served LoRA name = prefix + version name, so concurrent runs sharing
+        # one server (each publishing v0001, v0002, ...) never collide
+        self.lora_prefix = lora_prefix
+        self.max_retries = 3
 
     # -- http -------------------------------------------------------------
     def _post(self, path: str, payload: dict) -> dict:
@@ -65,12 +72,25 @@ class VllmClient:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                body = resp.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"POST {path} failed ({e.code}): {detail[:500]}") from e
+        # transient failures (server queue timeouts under shared load, brief
+        # restarts) are retried with backoff; HTTP errors are surfaced at once
+        for attempt in range(self.max_retries + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    body = resp.read().decode("utf-8", errors="replace")
+                break
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", errors="replace")
+                # 5xx = engine crashed / restarting (watchdog brings it back):
+                # wait it out like a timeout; 4xx is a real request error
+                if e.code >= 500 and attempt < self.max_retries:
+                    time.sleep(min(60 * (attempt + 1), 180))
+                    continue
+                raise RuntimeError(f"POST {path} failed ({e.code}): {detail[:500]}") from e
+            except (TimeoutError, socket.timeout, urllib.error.URLError, ConnectionError) as e:
+                if attempt >= self.max_retries:
+                    raise
+                time.sleep(min(60 * (attempt + 1), 180))
         try:
             return json.loads(body)
         except json.JSONDecodeError:
@@ -82,7 +102,7 @@ class VllmClient:
         version = self._adapters.get(adapter)
         if version is not None and version.path is None:
             return self.model
-        return adapter  # served LoRA name
+        return self.lora_prefix + adapter  # served LoRA name
 
     # -- Engine protocol ---------------------------------------------------
     def generate(
@@ -180,7 +200,7 @@ class VllmClient:
         try:
             self._post(
                 "/v1/load_lora_adapter",
-                {"lora_name": version.name, "lora_path": version.path},
+                {"lora_name": self.lora_prefix + version.name, "lora_path": version.path},
             )
         except RuntimeError as e:
             if "already" in str(e).lower():  # idempotent re-load
@@ -193,6 +213,6 @@ class VllmClient:
             return
         self._adapters.pop(name, None)
         try:
-            self._post("/v1/unload_lora_adapter", {"lora_name": name})
+            self._post("/v1/unload_lora_adapter", {"lora_name": self.lora_prefix + name})
         except RuntimeError:
             pass  # already gone / server without runtime unload
