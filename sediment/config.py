@@ -36,6 +36,10 @@ class StreamConfig:
     max_reflection_chars: int = 1200
     gate_error_actions: bool = False  # P1.6: zero action weights on ERROR-status steps
     train_channels: str = "both"  # "both" | "act" | "obs": which token channels get weight
+    # "relu": w = relu(δ) (magnitude-weighted); "binary": w = 1[δ > gate_thr]
+    # (residual only selects tokens, plain CE on the selected set)
+    weight_mode: str = "relu"
+    gate_thr: float = 0.0
     # signed action credit on EVERY action token (no step-status gate):
     # δ > pos_thr -> +min(δ, pos_cap) CE; δ < -neg_thr -> -min(-δ, neg_cap)
     # unlikelihood -log(1-p) scaled by ul_lambda; |δ| inside the dead band -> 0.

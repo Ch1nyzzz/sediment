@@ -86,6 +86,8 @@ def to_train_sample(traj: Trajectory, hr: HindsightResult, cfg: StreamConfig) ->
                             for d in s.deltas])
         elif i in bad:  # P1.6 status gate: never reinforce a known-bad action
             weights.append([0.0] * len(s.deltas))
+        elif cfg.weight_mode == "binary":
+            weights.append([1.0 if d > cfg.gate_thr else 0.0 for d in s.deltas])
         else:
             weights.append([max(max(d, 0.0), cfg.w_floor) for d in s.deltas])
     return TrainSample(

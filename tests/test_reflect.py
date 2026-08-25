@@ -111,3 +111,14 @@ def test_norm_floor_scales_dose_with_evidence_mass():
     b = weighted_ce(logits, targets, big, norm_floor=20.0)
     c = weighted_ce(logits, targets, small)  # mean: mass-independent
     assert float(a) < float(b) and abs(float(c) - float(b)) < 1e-6
+
+
+def test_binary_weight_mode_selects_without_magnitude():
+    t = traj()
+    hr = HindsightResult(task_id="t1", spans=[
+        SpanScore(2, "assistant", [0.05, 2.0]), SpanScore(3, "tool", [1.0]),
+        SpanScore(4, "assistant", [0.3, -1.0]), SpanScore(5, "tool", [0.2])],
+        obs_surprise=0.6, act_gain=0.4)
+    w = to_train_sample(t, hr, StreamConfig(weight_mode="binary", gate_thr=0.1,
+                                            train_channels="act")).token_weights_by_msg
+    assert w[2] == [0.0, 1.0] and w[4] == [1.0, 0.0] and w[3] == [0.0]
