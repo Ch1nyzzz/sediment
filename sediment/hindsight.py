@@ -8,6 +8,8 @@ action signal. Two prefill-only score calls, no sampling, no teacher model.
 """
 from __future__ import annotations
 
+import re
+
 from sediment.config import StreamConfig
 from sediment.experience import inject
 from sediment.spans import align_suffix, spans_from_lengths
@@ -47,6 +49,19 @@ def score(
     )
 
 
+STATUS_RE = re.compile(r"error|invalid|fail|exceed|denied|cannot|unable", re.I)
+
+
+def _error_action_indices(messages) -> set[int]:
+    """Indices of assistant messages whose next env message reads as an error."""
+    bad: set[int] = set()
+    for i, m in enumerate(messages):
+        if m.role == "assistant" and i + 1 < len(messages) and messages[i + 1].role in ("tool", "user"):
+            if STATUS_RE.search(messages[i + 1].content[:300]):
+                bad.add(i)
+    return bad
+
+
 def to_train_sample(traj: Trajectory, hr: HindsightResult, cfg: StreamConfig) -> TrainSample:
     """Per-token training weights from hindsight deltas.
 
@@ -56,10 +71,23 @@ def to_train_sample(traj: Trajectory, hr: HindsightResult, cfg: StreamConfig) ->
     index-parallel to traj.messages.
     """
     by_msg = {s.msg_idx: s for s in hr.spans}
+    bad = _error_action_indices(traj.messages) if cfg.gate_error_actions else set()
+    off = {"both": set(), "act": {"tool"}, "obs": {"assistant"}}[cfg.train_channels]
     weights: list[list[float]] = []
     for i in range(len(traj.messages)):
         s = by_msg.get(i)
-        weights.append([max(max(d, 0.0), cfg.w_floor) for d in s.deltas] if s else [])
+        if s is None:
+            weights.append([])
+        elif s.role in off:  # channel ablation
+            weights.append([0.0] * len(s.deltas))
+        elif cfg.signed and s.role == "assistant":  # dead band, then signed caps
+            weights.append([min(d, cfg.pos_cap) if d > cfg.pos_thr
+                            else -min(-d, cfg.neg_cap) if d < -cfg.neg_thr else 0.0
+                            for d in s.deltas])
+        elif i in bad:  # P1.6 status gate: never reinforce a known-bad action
+            weights.append([0.0] * len(s.deltas))
+        else:
+            weights.append([max(max(d, 0.0), cfg.w_floor) for d in s.deltas])
     return TrainSample(
         task_id=traj.task_id, messages=list(traj.messages), token_weights_by_msg=weights
     )

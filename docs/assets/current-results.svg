@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="590" viewBox="0 0 1000 590" role="img" aria-labelledby="title desc">
+  <title id="title">Success count for current matched EnvScaler arms</title>
+  <desc id="desc">Horizontal bars compare successes out of 200. aTTT paper is highest at 45, signed unlikelihood has 41, and full-context 3-gram has 8.</desc>
+  <rect width="1000" height="590" rx="18" fill="#0d1117"/>
+  <text x="40" y="50" fill="#f0f6fc" font-family="system-ui, sans-serif" font-size="25" font-weight="700">Matched EnvScaler results</text>
+  <text x="40" y="78" fill="#8b949e" font-family="system-ui, sans-serif" font-size="15">Successes / 200 · Qwen3-4B-Instruct-2507 · same task IDs</text>
+
+  <line x1="220" y1="100" x2="220" y2="540" stroke="#30363d"/>
+  <line x1="320" y1="100" x2="320" y2="540" stroke="#21262d"/>
+  <line x1="420" y1="100" x2="420" y2="540" stroke="#21262d"/>
+  <line x1="520" y1="100" x2="520" y2="540" stroke="#21262d"/>
+  <line x1="620" y1="100" x2="620" y2="540" stroke="#21262d"/>
+  <line x1="720" y1="100" x2="720" y2="540" stroke="#21262d"/>
+  <line x1="600" y1="100" x2="600" y2="540" stroke="#8b949e" stroke-width="2" stroke-dasharray="5 5"/>
+  <text x="600" y="96" text-anchor="middle" fill="#8b949e" font-family="system-ui, sans-serif" font-size="12">standard = 38</text>
+
+  <g font-family="system-ui, sans-serif" font-size="14" fill="#c9d1d9">
+    <text x="200" y="132" text-anchor="end">aTTT paper · standalone</text>
+    <text x="200" y="182" text-anchor="end">signed action · UL 0.02</text>
+    <text x="200" y="232" text-anchor="end">historical T0b</text>
+    <text x="200" y="282" text-anchor="end">T0c paper dose</text>
+    <text x="200" y="332" text-anchor="end">residual · standalone</text>
+    <text x="200" y="382" text-anchor="end">standard rollout</text>
+    <text x="200" y="432" text-anchor="end">retry</text>
+    <text x="200" y="482" text-anchor="end">residual · full context</text>
+    <text x="200" y="532" text-anchor="end">3-gram · full context</text>
+  </g>
+
+  <rect x="220" y="112" width="450" height="28" rx="5" fill="#3fb950"/>
+  <rect x="220" y="162" width="410" height="28" rx="5" fill="#d29922"/>
+  <rect x="220" y="212" width="410" height="28" rx="5" fill="#58a6ff"/>
+  <rect x="220" y="262" width="410" height="28" rx="5" fill="#58a6ff"/>
+  <rect x="220" y="312" width="400" height="28" rx="5" fill="#a371f7"/>
+  <rect x="220" y="362" width="380" height="28" rx="5" fill="#8b949e"/>
+  <rect x="220" y="412" width="370" height="28" rx="5" fill="#8b949e"/>
+  <rect x="220" y="462" width="340" height="28" rx="5" fill="#f85149"/>
+  <rect x="220" y="512" width="80" height="28" rx="5" fill="#f85149"/>
+
+  <g font-family="ui-monospace, SFMono-Regular, monospace" font-size="15" font-weight="700" fill="#f0f6fc">
+    <text x="680" y="132">45</text>
+    <text x="640" y="182">41</text>
+    <text x="640" y="232">41</text>
+    <text x="640" y="282">41</text>
+    <text x="630" y="332">40</text>
+    <text x="610" y="382">38</text>
+    <text x="600" y="432">37</text>
+    <text x="570" y="482">34</text>
+    <text x="310" y="532">8</text>
+  </g>
+</svg>

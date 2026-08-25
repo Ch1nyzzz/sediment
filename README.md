@@ -24,6 +24,86 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 GPU path (vLLM serving + peft trainer) is lazy-imported; see `docs/SYSTEM.md`.
 
+## Current empirical snapshot (2026-08-24)
+
+All numbers below are paired on the same 200 EnvScaler `rl` tasks with
+`Qwen/Qwen3-4B-Instruct-2507`.  Adaptation arms use an episode-local LoRA; the
+paper-dose arms use rank 8, alpha 16, learning rate `5e-4`, and two optimizer
+steps per accepted update.  Aggregate reports, frozen configs, and analysis
+scripts are checked in under
+[`loops/four-gpu-t0b-latest/`](loops/four-gpu-t0b-latest/).
+Raw trajectories and worker logs remain local and are excluded from Git.
+
+![Success count for current matched EnvScaler arms](docs/assets/current-results.svg)
+
+| Arm | Success | Mean reward | Readout |
+| --- | ---: | ---: | --- |
+| aTTT paper, latest observation standalone | **45/200** | **0.6351** | Best tested arm |
+| Signed action, ERROR UL `lambda=0.02` | 41/200 | 0.6084 | Mechanically works; behavioral null |
+| Historical T0b | 41/200 | 0.6236 | Tied on success, higher reward than signed |
+| T0c paper dose | 41/200 | 0.5974 | Tied on success, lower reward than signed |
+| Residual, latest observation standalone | 40/200 | 0.6311 | No residual-weight main-effect win |
+| Residual x 3-gram, standalone | 40/200 | 0.6287 | Active 3-gram factor; null addition |
+| Standard rollout | 38/200 | 0.6078 | Frozen baseline |
+| Retry | 37/200 | 0.6202 | Retry baseline |
+| Residual, full trajectory context | 34/200 | 0.5619 | Context interference |
+| 3-gram, full trajectory context | 8/200 | 0.4262 | Severe context interference |
+
+### What the factorial says
+
+| Token weighting | Standalone target | Full-trajectory target |
+| --- | ---: | ---: |
+| aTTT 3-gram | **45/200**, reward 0.635 | 8/200, reward 0.426 |
+| residual | 40/200, reward 0.631 | 34/200, reward 0.562 |
+
+The dominant factor is training context, not residual weighting.  Full-context
+observation training teaches an action-conditioned environment predictor and
+then reuses that adapter for action generation.  It costs 37 successes under
+3-gram weighting (`p=7.84e-10`, exact paired McNemar).  Residual weighting is
+protective only inside that already harmful regime; in the healthy standalone
+regime it scores 40 versus aTTT's 45 (`p=0.180`).
+
+### Why signed unlikelihood did not improve behavior
+
+```mermaid
+flowchart LR
+    O[Observed ERROR] --> R[Matched-action residual]
+    R --> U[Lower selected failed-token probability]
+    U --> Q{Where should the mass go?}
+    Q -->|No repaired-action target| D[Diffuse or unrelated alternatives]
+    D --> N[No reliable task-success gain]
+```
+
+The optimization itself did not fail.  The signed arm completed 200 unique
+tasks with zero top-level errors: 399/417 selected windows produced accepted
+updates, 95 material negative-branch updates lowered ERROR weighted log-prob
+by `0.04925` on average, and 167 positive-branch updates raised ok weighted
+log-prob by `0.01282`.  No accepted update violated its requested direction.
+
+The failure is at the objective-to-behavior interface:
+
+1. Unlikelihood specifies **away from the failed action**, not **toward a
+   repaired action**.  Released probability mass can move to many irrelevant
+   alternatives.
+2. The matched-action likelihood contrast is a weak credit locator.  `93.67%`
+   of token deltas have magnitude below `1e-4`; its AUC for ranking ok above
+   ERROR is `0.420`, and the remaining signal is dominated by a few structured
+   tool/identifier outliers rather than demonstrated causal blame.
+3. The selected failed fragments need not recur in a useful future state
+   within the same episode.  Suppression can therefore be locally correct but
+   behaviorally inert.
+4. The observed lift over standard rollout is only +3 paired tasks
+   (rescues/harms `6/3`, `p=0.508`) and the arm is -4 paired tasks behind aTTT
+   (`2/6`, `p=0.289`).  This run provides no evidence of a positive effect;
+   an exact `lambda=0` matched control is still required to isolate the causal
+   contribution of the negative branch.
+
+The next informative objective is a paired failed-action versus
+hindsight-repaired-action target.  If the cheaper causal ablation is preferred
+first, run the exact `lambda=0` control with the masks, KL limit, backtracking,
+and task IDs frozen.  Full analysis and integrity evidence are in the
+[`experiment report`](loops/four-gpu-t0b-latest/report.md).
+
 ## Layout
 
 ```

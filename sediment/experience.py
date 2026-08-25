@@ -26,6 +26,10 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[:max_chars] + "…"
 
 
+def _indent(text: str, pad: str = "    ") -> str:
+    return "\n".join(pad + ln for ln in text.splitlines())
+
+
 def _tail(text: str, max_chars: int) -> str:
     text = text.replace("\n", " ")
     if len(text) <= max_chars:
@@ -90,6 +94,9 @@ def build_block(
                 f"  {n}. {_truncate(action, cfg.max_result_chars)} -> "
                 f"{_truncate(result, cfg.max_result_chars)}"
             )
+        refl = str(traj.meta.get("reflection", "") or "")
+        if refl:
+            seg.append(f"  Reflection after this attempt:\n{_indent(refl)}")
         seg.append("")
         seg_size = sum(len(x) + 1 for x in seg)
         if kept and size + seg_size > budget:  # keep at least one peer
@@ -107,6 +114,9 @@ def build_block(
         feedback = _final_feedback(own)
         if feedback:
             lines.append(f"Final feedback: {_tail(feedback, cfg.max_result_chars)}")
+        refl = str(own.meta.get("reflection", "") or "")
+        if refl:
+            lines.append(f"Your reflection on that attempt:\n{_indent(refl)}")
     lines.append(EXPERIENCE_CLOSE)
     return ExperienceBlock(
         text="\n".join(lines),

@@ -23,7 +23,12 @@ Titans 门控三件套（只有幅度门无价值门——差异位）；NCA 锚
 
 每 K=5 环境步更新一次；候选文本三选一：Self（最近一步推理+动作）/ Env（最近观察）/
 Summary（LLM 压缩进度笔记）；**只用最近一步不用全前缀**。纯 NTP 无 reward；
-n-gram 降权 w=max(0.05, 1/(1+f))，f=3-gram 在先前更新史的出现次数。
+n-gram 降权 w=max(0.05, 1/(1+f))，f=**含该位置的所有 3-gram** 在先前更新史计数的最大值
+（论文 Eq.8-9，非 trailing）。候选选型 model-dependent（Table 1 实测数字，2026-08-24 从 HTML 核对）：
+**4B ALFWorld 基线仅 1.9±0.5 → Self 3.6/Env 4.5/Summary 4.8（绝对增益 +1.7~+2.9pp，三者
+误差带重叠）**；9B 50.7→Self 55.7/Env 55.5/Summary 54.3；SWE-Lite 9B 35.6→38.4、
+27B 57.8→62.7。头条 +5pp 来自 9B——**4B 尺度他们自己也只有 ~2pp 绝对增益**。**代码未开源**（2026-08 三路核实）；本仓 `scripts/attt_worker.py`
+按论文复刻（LoRA 用我方配置对齐更新预算，原文 r=8 α=16 lr5e-4 2步）。
 LoRA r=8 α=16 lr 5e-4 每次 2 步；异步训练 GPU + vLLM 热换 <100ms 不阻塞；
 **episode 内持续、episode 间重置**。ALFWorld 9B 50.7→55.7；SWE-Lite 27B 57.8→62.7；
 增益集中于"有底力但长轨迹漂移"。定性：episode 内防漂移自稳定器，非学习器

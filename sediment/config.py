@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -26,12 +26,28 @@ class StreamConfig:
     # buffer / retrieval
     buffer_path: str = "results/buffer.jsonl"
     retrieval_k: int = 4
+    serve_experience: bool = False  # ICL arm: first attempt carries the retrieved block
 
     # experience block
     max_result_chars: int = 200
     max_block_chars: int = 4000  # total block budget; peers are dropped past it
+    reflect: bool = False  # actor writes a reflection per first attempt; rendered with trajectories
+    reflect_max_tokens: int = 400
+    max_reflection_chars: int = 1200
+    gate_error_actions: bool = False  # P1.6: zero action weights on ERROR-status steps
+    train_channels: str = "both"  # "both" | "act" | "obs": which token channels get weight
+    # signed action credit on EVERY action token (no step-status gate):
+    # δ > pos_thr -> +min(δ, pos_cap) CE; δ < -neg_thr -> -min(-δ, neg_cap)
+    # unlikelihood -log(1-p) scaled by ul_lambda; |δ| inside the dead band -> 0.
+    signed: bool = False
+    pos_thr: float = 0.5
+    neg_thr: float = 0.5
+    pos_cap: float = 1.55
+    neg_cap: float = 4.51
+    ul_lambda: float = 0.1
 
     # gate
+    gate_validate: bool = True  # False: skip G2/G3 measurement entirely (always pass)
     gate_min_surprise: float = 0.05  # G1 magnitude threshold on obs_surprise
     gate_recurrence: int = 2  # ledger: distinct tasks with similar surprise before write
     gate_replay_states: int = 8  # G2: replayed decision points per candidate
@@ -50,6 +66,11 @@ class StreamConfig:
     micro_batch: int = 1
     max_seq_len: int = 12288
     w_floor: float = 0.0  # weight floor for supervised tokens
+    # dose ∝ evidence: per-sample loss = Σ w·ce / max(Σ w, w_norm_floor). With 0 the
+    # loss is a weighted mean, so a sample carrying ~1 unit of weight mass still
+    # drives a full-strength step (forensics 08-25: act-only merges trained on
+    # mass 1.7 / 0.6 wrecked probes). Signed: applied to each sign separately.
+    w_norm_floor: float = 0.0
     anchor_kl_coef: float = 0.0  # NCA anchoring (0 = off)
 
     # merge / registry

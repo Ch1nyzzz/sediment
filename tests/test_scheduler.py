@@ -323,3 +323,19 @@ def test_unknown_env_family_raises(stub_modules, tmp_path):
     with pytest.raises(ValueError, match="env_family"):
         run_stream(tasks, [ScriptedMockEngine()], StubBuffer(), StubGate(cfg),
                    stub_trainer, StubRegistry(), cfg)
+
+
+def test_serve_experience_injects_block_into_first_attempt(stub_modules, tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.serve_experience = True
+    cfg.gate_min_surprise = 999  # ICL arm: no proposal, no training
+    buffer, gate, registry = StubBuffer(), StubGate(cfg), StubRegistry()
+    records = run_stream(make_tasks(8), [ScriptedMockEngine()], buffer, gate,
+                         stub_trainer, registry, cfg)
+    assert registry.publishes == 0
+    firsts = [t for t in buffer.items if not t.is_retry]
+    assert len(firsts) == 8
+    for t in firsts:  # block built with own=None, rendered ahead of the task text
+        user = next(m for m in t.messages if m.role == "user")
+        assert user.content.startswith("block:none\n\n")
+    assert all(r.meta["served_experience"] == [] for r in records)

@@ -61,6 +61,14 @@ class Gate:
         Generation is greedy (temperature 0) so the A/B diff is meaningful.
         """
         cfg = self.cfg
+        if not cfg.gate_validate:
+            # measurement itself is the cost (probe rollouts + replays); a run
+            # that never blocks should not pay it
+            return GateDecision(
+                candidate_id=candidate.candidate_id, passed=True,
+                magnitude=self._magnitude(),
+                reason="gate_validate=false: G2/G3 measurement skipped",
+            )
         notes: list[str] = []
 
         behavioral_changed: Optional[float] = None
