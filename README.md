@@ -3,12 +3,37 @@
 Experiences flow through; only what passes the gate settles into the weights.
 
 An agent serves a task stream (predict-then-update, G=1 per task). After each
-task, a hindsight pass prices the experience via belief residuals (per-token
-deltas from scoring the trajectory with vs. without an evidence block built
-from retrieved past experiences + the task's own outcome). A three-stage gate
-(magnitude + recurrence ledger, behavioral replay, transfer probe) decides
-what gets distilled into a persistent session LoRA. Goal: the agent gets
-stronger the more it is used — without rewards, without offline RL.
+task, a hindsight pass prices the experience via residuals (per-token deltas
+from scoring the trajectory with vs. without an evidence block built from
+retrieved past experiences + the task's own outcome + self-reflection). The
+priced residual is distilled into a persistent session LoRA. Goal: the agent
+gets stronger the more it is used — without group rollouts, without offline RL.
+
+## Main method (as of 2026-08-25, `p3m800_refl_*_f` arms)
+
+The main contribution is **residual-priced posterior distillation**; the
+gate is an insurance layer, not the story. The current arm is:
+
+| Piece | Setting | Why (forensics that fixed it) |
+| --- | --- | --- |
+| Evidence block `E` | top-4 retrieved trajectories (verbatim actions + truncated results + their reflections) + own outcome (`SUCCEEDED/FAILED`, numeric `reward=`, final feedback) + own reflection (`reflect=true`) | 08-23: outcome-only block falsified (−3.5pp); steps block flips the ceiling positive |
+| Residual | `δ_t = log π(t|x,E) − log π(t|x)`, two prefills, per token | resid P0/P1 |
+| Channels | `train_channels=act`: **observation tokens carry no weight** | 08-25 three independent forensics: obs-only variants sink probes 0.167/0.167/0.333 — the model memorises instance data (patient ids, log ids) |
+| Pricing | `signed=true`: every action token, no step-status gate; dead band `pos_thr=0.05` / `neg_thr=0.6`; `+min(δ,1.55)` CE, `−min(−δ,4.51)` unlikelihood `λ=0.1` (`p3m800_refl_signed_f`). Sibling arm: relu(δ) + `gate_error_actions` (`p3m800_refl_act_f`) | reward direction is not a hard mask; continuous rewards need no change here |
+| Token masks | framing tokens (`<tool_call>`, roles, `<\|im_end\|>`) never carry credit; negative credit only on values / content / tool name, never on JSON keys (`sediment/semantic.py`) | 08-25: no-floor signed arm collapsed into narrating without tool calls — negative credit had landed on the call framing |
+| Dose ∝ evidence | `w_norm_floor=3`: loss `= Σw·CE / max(Σw, floor)`, per sign | 08-25: weighted-mean loss let samples with 0.6–1.7 units of mass drive full-strength steps (act-only loss 4→0.001 in 4 steps) |
+| Merge | EMA `merge_alpha=0.5`, W=16, staleness 1 window, lr 1.5e-4, α32, 2 epochs, ≤2 candidate samples/window | P1.7 knee |
+| Gate | G2/G3 measured (6 probes) but **not enforced** in the main arms (`gate_min_behavior_change=0`, `gate_min_probe_delta=-999`); kept as insurance for long streams | 08-25: gated arm blocks collapse but generates no gain; 12-probe noise ±0.3 ≈ signal size |
+
+The only remaining binary assumption is the `SUCCEEDED/FAILED` tag in the
+block (`SUCCESS_THRESHOLD=0.999`, `experience.py`) and the retry trigger; the
+numeric reward is already rendered, so graded-reward benchmarks (CL-Bench) only
+need that tag re-expressed as a relative position (e.g. vs. buffer history).
+
+Status: `p3m800_refl_act_f` / `p3m800_refl_signed_f` running on the 800-task
+EnvScaler stream (frozen 800 / icl_refl controls). Verdict rule: whether the
+w6–11 "hit 30 steps, never settle" count stays flat and success vs. frozen.
+See `docs/EXPERIMENTS.md` §P3 for the full 08-25 forensics chain.
 
 Docs (Chinese): `docs/BACKGROUND.md` (positioning & claims),
 `docs/EXPERIMENTS.md` (P1–P4), `docs/SYSTEM.md` (4-GPU design),
@@ -24,7 +49,11 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 GPU path (vLLM serving + peft trainer) is lazy-imported; see `docs/SYSTEM.md`.
 
-## Current empirical snapshot (2026-08-24)
+## Historical snapshot: within-episode arms (2026-08-24, superseded)
+
+These are the tier0 within-episode arms (episode-local LoRA, no stream
+accumulation). Superseded by the streaming main method above; kept for
+forensics.
 
 All numbers below are paired on the same 200 EnvScaler `rl` tasks with
 `Qwen/Qwen3-4B-Instruct-2507`.  Adaptation arms use an episode-local LoRA; the

@@ -115,12 +115,60 @@ v4 型毒写入；无门控则后段曲线不存在。9 次门控重试、0 hind
 待补：≥3 种子 × 3 流序、五臂全对照（context 累积/无门控/逐任务重置）、扩探针集、
 冻结快照 ID/OOD、回访早期任务。
 
+### P3 正式六臂（2026-08-25 凌晨，tail-160 流 W=16 单种子，results/p3m_*）
+
+frozen 31/160、icl（首答带 top-4 检索块）34、**ng（定价+EMA 无门控）20**：前 5 窗 12 vs 8
+领先，w4 毒合并后探针 0.75→0.17，进入"循环查询永不结算"（w5–6 32 题全撞 30 步 reward 0）
+——**先涨后崩实锤，48 题冒烟 0.700 是崩前截断**。gated（G3 容差 −0.09）拦 6/9、守 v0003，
+尾段 6/16（frozen 9）：**门控挡崩不生增益**，12 探针复测噪声 ±0.3 = 信号量级。
+paper 剂量（r8 α16 lr5e-4）4 次合并即崩。
+
+**通道归因（`scripts/channel_forensics.py`，两次独立毒合并复现，三变体从父版本训 +12 探针）**：
+obs-only 0.167/0.167、act-only 0.667/0.583、both 0.250/0.083（父 0.417）→ **毒源=观测通道 CE**，
+权重质量落在病人档案/log_id 等实例数据。推翻"失败轨迹训世界模型最安全"：策略与世界模型
+共用 4B LM 时观测 CE 泄漏进策略。→ 主线改 `train_channels=act`。
+
+### P3 800 题流与主方法定型（2026-08-25，results/p3m800_*，语料尾 806 = 800 流 + 6 探针）
+
+臂：frozen / icl_refl / refl_act / refl_signed（全动作 token 带符号死区，不看步骤状态）。
+**无 floor 的两条训练臂都崩**：refl_act w6–8 撞 30 步 9/14/15（与 ng 同型，且它无观测通道
+→ 观测不是唯一根因）；refl_signed 前 9 窗 17 vs frozen 9 领先，w7/w8 两次"动作全变+探针 0"
+合并后退化为只叙述不调用工具（1 步结束）。
+
+三次归因，三个根因，三个修复（均已进代码）：
+1. **观测通道背实例数据** → `train_channels=act`。
+2. **剂量与证据脱钩**：加权平均 Σw·CE/Σw 让动作质量仅 1.7/0.6 的样本驱动满剂量更新
+   （act-only loss 4 步 4→0.001）→ `w_norm_floor`（loss=Σw·CE/max(Σw,floor)，正负各自适用）。
+3. **负信用落在框架 token**（`<tool_call>`/JSON 键/工具名）压掉"调用工具"本身 →
+   `sediment/semantic.py` 语义掩码：框架 token 任何符号都不给信用，负信用只留值/内容/工具名。
+
+**当前主方法 = 反思增强证据块 + 动作通道带符号残差定价 + 剂量下限 + 语义掩码 + EMA 合并；
+门控只量测不执行（保险层）**。具体配置见 README "Main method" 表。对照臂
+`p3m800_refl_act_f`（floor + P1.6 状态门）、`p3m800_refl_signed_f`（floor + 语义掩码，
+pos_thr 0.05 / neg_thr 0.6）跑中；判据 = w6–11 撞 30 步计数是否抬头 + 成功数 vs frozen。
+
+对分级/连续 reward 的兼容性（为 CL-Bench 准备）：定价本身不依赖成败二值（signed 死区看 δ，
+不看 reward）；块里已渲染数值 `reward=`；唯一残留二值点 = `SUCCESS_THRESHOLD=0.999` 决定的
+`SUCCEEDED/FAILED` 标签与重试触发。迁移到连续 reward 只需把标签改为相对位置
+（如"高于/低于 buffer 同域历史均值"），并复核 δ–reward 相关是否仍在（P0 为 +0.336）。
+
 ## P4 外部对标（只挑三个）
 
 1. **ALFWorld**：aTTT 在此 +5.0，直接可比；底座选成功率落在 mixed 区间的
    （aTTT 的 4B 在 ALFWorld 仅 1.9%，无物可学，或需 9B 级）。
 2. **LifelongAgentBench**：唯一技能依赖任务流终身基准；LifeSkill +7 是要打的数。
 3. **tau2-bench**：截至 2026-08 零篇适应类论文使用，占空位 + OOD 章节。
+
+4. **CL-Bench（2606.05661，2026-08-25 评估：适合，排在 aTTT 对标后、tau2 前）**：
+   协议与我们一字不差（固定顺序流 20–120 episode/域、gain = 同实例 stateful − stateless、
+   归一化 gain 除 headroom）；潜在结构是机制层的（schema 约定/代码库布局/对手策略）且
+   5/6 域有 migration 测漂移；反馈程序化可验证（bash 报错/SQL 结果）。**它明说不评参数方法、
+   征集社区提交**，上下文侧全体（ICL/Notepad/Mem0/ACE/Claude Code/Codex）被钉在归一化 gain
+   25.4% 天花板，结论"agents overfit to immediate observations"与我们观测通道归因互证。
+   约束：只评前沿模型（无开源小模型数字），4B stateless 可能贴 0 → 先 frozen 摸底挑有 headroom
+   的域（Database Exploration、Cohort Studies 最像 EnvScaler 工具调用；Poker/Sales 可能全废）；
+   reward 连续（见 P3 兼容性说明）；Codebase 域要 Docker，每域一个 env adapter。
+   计划：先 2 域三臂 frozen / ICL 全历史（它自己的 SOTA 基线）/ ours。
 
 SWE-bench Lite 为 stretch；GAIA 不做（不可重复交互、无训练集）。
 
