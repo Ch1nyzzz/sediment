@@ -150,6 +150,73 @@ def test_reverse_kl_is_mode_seeking():
     assert topk_kl(off_mode, t_ids, lq, mask, reverse=False)[0].item() > 10
 
 
+def test_chunked_kl_matches_monolithic_loss_and_gradient():
+    """Position chunking changes peak memory, not the KL/anchor objective."""
+    import contextlib
+    from types import SimpleNamespace
+
+    torch = pytest.importorskip("torch")
+    from sediment.trainer import _backward_chunked_kl, topk_kl
+
+    torch.manual_seed(3)
+    n_pos, vocab, k = 6, 13, 3
+    base_logits = torch.randn(n_pos, vocab)
+    teacher_logits = torch.randn(n_pos, vocab)
+    teacher_logp = teacher_logits.log_softmax(-1)
+    t_logq, t_ids = teacher_logp.topk(k, dim=-1)
+    mask = torch.tensor([[1.0, 0.0, 1.0, 0.0, 0.0, 1.0]])
+    targets = torch.tensor([[2, 4, 6, 8, 10, 12]])
+    input_ids = torch.zeros(1, n_pos + 1, dtype=torch.long)
+
+    class SelectedLogitModel:
+        def __init__(self):
+            self.shift = torch.nn.Parameter(torch.randn(n_pos, vocab) * 0.1)
+            self.adapter_enabled = True
+
+        def __call__(self, *, input_ids, logits_to_keep=0):
+            logits = base_logits + (self.shift if self.adapter_enabled else 0.0)
+            if isinstance(logits_to_keep, torch.Tensor):
+                logits = logits.index_select(0, logits_to_keep)
+            return SimpleNamespace(logits=logits.unsqueeze(0))
+
+        @contextlib.contextmanager
+        def disable_adapter(self):
+            old = self.adapter_enabled
+            self.adapter_enabled = False
+            try:
+                yield
+            finally:
+                self.adapter_enabled = old
+
+    model = SelectedLogitModel()
+    student = model(input_ids=input_ids).logits
+    main, _ = topk_kl(
+        student, t_ids.unsqueeze(0), t_logq.unsqueeze(0), mask,
+        targets=targets, reverse=True,
+    )
+    base_logp = base_logits.log_softmax(-1)
+    anchor_logq, anchor_ids = base_logp.topk(k, dim=-1)
+    anchor, _ = topk_kl(
+        student, anchor_ids.unsqueeze(0), anchor_logq.unsqueeze(0),
+        (mask == 0.0).float(),
+    )
+    expected = main + 0.5 * anchor
+    expected.backward()
+    expected_grad = model.shift.grad.detach().clone()
+    model.shift.grad = None
+
+    cfg = StreamConfig(
+        kl_target=True, kl_reverse=True, kl_topk=k, anchor_kl_coef=0.5,
+    )
+    actual, _ = _backward_chunked_kl(
+        model, input_ids, t_ids.unsqueeze(0), t_logq.unsqueeze(0), mask,
+        targets, cfg, micro_batch=1, chunk=2,
+    )
+
+    assert actual == pytest.approx(expected.item(), abs=1e-6)
+    assert torch.allclose(model.shift.grad, expected_grad, atol=1e-6, rtol=1e-5)
+
+
 def test_sft_credits_outside_the_tool_call_and_damps_copied_values():
     """The gated modes credit only the tool-call interior; sft must cover the
     whole action (including how a turn ends), and must damp argument values

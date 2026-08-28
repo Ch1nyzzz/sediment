@@ -22,6 +22,10 @@ class StreamConfig:
     # while preserving common seeds across all arms within one replicate.
     generation_seed_salt: int = 0
     gpu_memory_utilization: float = 0.85
+    # Evaluation-only warm start. The adapter is copied into the run-local
+    # registry as v0001 before any task is served. Training runs leave this
+    # empty and build their adapter lineage online from v0000.
+    initial_adapter_path: str = ""
 
     # stream protocol
     window_size: int = 16
@@ -137,6 +141,11 @@ class StreamConfig:
     # corpus collection (no gate, no retry): skip the with/without delta scoring
     # entirely -- it is the dominant per-window cost (60 s mean vs 23 s attempt).
     score_hindsight: bool = True
+    # The historical hindsight block also summarized the current trajectory's
+    # terminal outcome.  Disable this for pure memory distillation: the teacher
+    # then differs from the student only by the pre-existing retrieved memory,
+    # with no target-outcome leakage.
+    hindsight_include_own_outcome: bool = True
     gate_validate: bool = True  # False: skip G2/G3 measurement entirely (always pass)
     gate_min_surprise: float = 0.05  # G1 magnitude threshold on obs_surprise
     gate_recurrence: int = 2  # ledger: distinct tasks with similar surprise before write

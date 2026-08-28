@@ -177,8 +177,9 @@ def _install_stubs(monkeypatch) -> None:
             return next(v for v in self._versions if v.name == name)
 
         def publish(self, candidate, parent, provenance):
+            parent_name = parent.name if hasattr(parent, "name") else str(parent)
             v = AdapterVersion(f"v{len(self._versions):04d}", "path",
-                               parent.name, list(provenance))
+                               parent_name, list(provenance))
             self._versions.append(v)
             return v
 
@@ -188,7 +189,7 @@ def _install_stubs(monkeypatch) -> None:
                                adapter_path=str(workdir), parent=parent.name)
 
     def run_stream(tasks, engines, buffer, gate, trainer_fn, registry, cfg, *,
-                   run_probe=None, probe_tasks=None, on_window=None):
+                   run_probe=None, probe_tasks=None, on_window=None, **_kw):
         w = max(1, cfg.window_size)
         records = [StreamRecord(task_id=t["task_id"], window=i // w,
                                 adapter=registry.current().name,
@@ -282,6 +283,44 @@ def test_run_stream_set_rejects_unknown_field(tmp_path, monkeypatch):
     mod = _load_script("run_stream")
     with pytest.raises(SystemExit):
         mod.main(["--engine", "mock", "--set", "not_a_field=1"])
+
+
+def test_run_stream_initial_adapter_for_heldout_eval(tmp_path, monkeypatch):
+    _install_stubs(monkeypatch)
+    mod = _load_script("run_stream")
+    adapter = tmp_path / "final-adapter"
+    adapter.mkdir()
+    (adapter / "adapter_config.json").write_text("{}")
+    summary = mod.main([
+        "--engine", "mock", "--tasks", "4", "--window", "2",
+        "--out", str(tmp_path), "--run-id", "heldout-final",
+        "--set", f"initial_adapter_path={adapter}",
+    ])
+    rows = [json.loads(line) for line in
+            (tmp_path / "heldout-final" / "stream.jsonl").read_text().splitlines()]
+    assert {row["adapter"] for row in rows} == {"v0001"}
+    assert summary["adapters"] == ["v0000", "v0001"]
+
+
+def test_heldout_pair_analysis_is_paired_and_family_aware():
+    mod = _load_script("analyze_heldout_pair")
+    frozen = [
+        {"task_id": "env_183_rl-task_1", "success": True},
+        {"task_id": "env_183_rl-task_2", "success": False},
+        {"task_id": "env_184_rl-task_1", "success": True},
+    ]
+    final = [
+        {"task_id": "env_183_rl-task_1", "success": True},
+        {"task_id": "env_183_rl-task_2", "success": True},
+        {"task_id": "env_184_rl-task_1", "success": False},
+    ]
+    result = mod.compare(frozen, final)
+    assert result["delta_successes"] == 0
+    assert result["paired"] == {
+        "final_only": 1, "frozen_only": 1, "ties": 1, "two_sided_exact_p": 1.0,
+    }
+    assert result["by_family"]["env_183"]["delta_successes"] == 1
+    assert result["by_family"]["env_184"]["delta_successes"] == -1
 
 
 def test_run_p1_probe_main_smoke(tmp_path, monkeypatch):

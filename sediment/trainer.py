@@ -293,22 +293,109 @@ def topk_kl(logits, t_ids, t_logq, mask, targets=None, norm_floor: float = 0.0,
     ti = t_ids[0].index_select(0, idx)
     lq = t_logq[0].index_select(0, idx)
     w = mask[0].index_select(0, idx)
-    logZ = torch.logsumexp(lg, dim=-1, keepdim=True)
-    lp = lg.gather(-1, ti) - logZ
+    tg = targets[0].index_select(0, idx) if targets is not None else None
+    kl, ce = _topk_kl_per_token(lg, ti, lq, targets=tg, reverse=reverse)
+    loss = (kl * w).sum() / w.sum().clamp_min(max(norm_floor, 1e-8))
+    return loss, (idx, kl.detach(), ce)
+
+
+def _topk_kl_per_token(logits, t_ids, t_logq, targets=None, reverse: bool = False):
+    """Per-position grouped-tail KL for already-selected logits.
+
+    Keeping this calculation separate lets the 8B trainer request only a
+    bounded set of output positions from the causal-LM head.  The formula is
+    identical to :func:`topk_kl`; only the order in which positions are
+    materialised changes.
+    """
+    import torch
+
+    logZ = torch.logsumexp(logits, dim=-1, keepdim=True)
+    lp = logits.gather(-1, t_ids) - logZ
     ce = None
     if targets is not None:
-        tg = targets[0].index_select(0, idx).unsqueeze(-1)
-        ce = (logZ - lg.gather(-1, tg)).squeeze(-1).detach()
-    q = lq.exp()                      # teacher on its own top-k
+        ce = (logZ - logits.gather(-1, targets.unsqueeze(-1))).squeeze(-1).detach()
+    q = t_logq.exp()                  # teacher on its own top-k
     p = lp.exp()                      # student there
     q_tail = (1.0 - q.sum(-1)).clamp_min(1e-9)
     p_tail = (1.0 - p.sum(-1)).clamp_min(1e-9)
     if reverse:
-        kl = (p * (lp - lq)).sum(-1) + p_tail * (torch.log(p_tail) - torch.log(q_tail))
+        kl = ((p * (lp - t_logq)).sum(-1)
+              + p_tail * (torch.log(p_tail) - torch.log(q_tail)))
     else:
-        kl = (q * (lq - lp)).sum(-1) + q_tail * (torch.log(q_tail) - torch.log(p_tail))
-    loss = (kl * w).sum() / w.sum().clamp_min(max(norm_floor, 1e-8))
-    return loss, (idx, kl.detach(), ce)
+        kl = ((q * (t_logq - lp)).sum(-1)
+              + q_tail * (torch.log(q_tail) - torch.log(p_tail)))
+    return kl, ce
+
+
+def _backward_chunked_kl(
+    model, input_ids, t_ids, t_logq, mask, targets, cfg: StreamConfig,
+    micro_batch: int, chunk: int = 1024,
+):
+    """Backpropagate the exact KL objective without full-sequence logits.
+
+    Qwen3 accepts a tensor-valued ``logits_to_keep`` argument.  Each chunk
+    therefore runs the same full prefix states but projects only the requested
+    positions through the 152k-way LM head.  Chunk numerators share the same
+    global denominator, so summing their backward passes is algebraically the
+    same gradient as one monolithic loss while avoiding the 4--5 GiB logits
+    allocation that prevents 8B training beside the resident service.
+    """
+    import torch
+
+    selected = mask[0].nonzero(as_tuple=True)[0]
+    selected_mass = float(mask[0].index_select(0, selected).sum())
+    selected_den = max(selected_mass, cfg.w_norm_floor, 1e-8)
+    main_value = 0.0
+    dbg_kl = []
+    dbg_ce = []
+
+    for start in range(0, selected.numel(), chunk):
+        pos = selected[start:start + chunk]
+        logits = model(input_ids=input_ids, logits_to_keep=pos).logits[0].float()
+        ti = t_ids[0].index_select(0, pos)
+        lq = t_logq[0].index_select(0, pos)
+        tg = targets[0].index_select(0, pos)
+        weight = mask[0].index_select(0, pos)
+        kl, ce = _topk_kl_per_token(
+            logits, ti, lq, targets=tg, reverse=cfg.kl_reverse
+        )
+        numerator = (kl * weight).sum()
+        (numerator / selected_den / micro_batch).backward()
+        main_value += float(numerator.detach()) / selected_den
+        dbg_kl.append(kl.detach().cpu())
+        dbg_ce.append(ce.detach().cpu())
+        del logits, kl, ce, numerator
+
+    anchor_value = 0.0
+    if cfg.anchor_kl_coef > 0.0:
+        free = (mask[0] == 0.0).nonzero(as_tuple=True)[0]
+        free_den = max(float(free.numel()), 1e-8)
+        for start in range(0, free.numel(), chunk):
+            pos = free[start:start + chunk]
+            with torch.no_grad(), model.disable_adapter():
+                base_logits = model(input_ids=input_ids, logits_to_keep=pos).logits[0].float()
+                values, anchor_ids = base_logits.topk(cfg.kl_topk, dim=-1)
+                anchor_logq = values - torch.logsumexp(base_logits, dim=-1, keepdim=True)
+            del base_logits, values
+
+            logits = model(input_ids=input_ids, logits_to_keep=pos).logits[0].float()
+            anchor_kl, _ = _topk_kl_per_token(
+                logits, anchor_ids, anchor_logq, reverse=False
+            )
+            numerator = anchor_kl.sum()
+            scaled = cfg.anchor_kl_coef * numerator / free_den
+            (scaled / micro_batch).backward()
+            anchor_value += cfg.anchor_kl_coef * float(numerator.detach()) / free_den
+            del logits, anchor_ids, anchor_logq, anchor_kl, numerator, scaled
+
+    debug = None
+    if selected.numel():
+        debug = (
+            selected.detach().cpu(),
+            torch.cat(dbg_kl) if dbg_kl else torch.empty(0),
+            torch.cat(dbg_ce) if dbg_ce else torch.empty(0),
+        )
+    return main_value + anchor_value, debug
 
 
 def base_topk(model, input_ids, k: int, chunk: int = 512):
@@ -398,28 +485,31 @@ def _train_torch(
                 continue
             input_ids = torch.tensor([ids], device=device)
             w = torch.tensor([ws[1:]], dtype=torch.float32, device=device)
-            logits = model(input_ids=input_ids).logits[:, :-1]
             if cfg.kl_target:
                 # weights/teacher at position j predict token j, i.e. logits[j-1]
                 t_ids, t_logq = _teacher_tensors(tch[1:], ws[1:], cfg.kl_topk, device)
-                loss, dbg = topk_kl(logits, t_ids, t_logq, w, targets=input_ids[:, 1:],
-                                    norm_floor=cfg.w_norm_floor, reverse=cfg.kl_reverse)
+                loss_value, dbg = _backward_chunked_kl(
+                    model, input_ids, t_ids, t_logq, w, input_ids[:, 1:], cfg,
+                    micro_batch,
+                )
                 if dbg is not None:
                     print(_kl_digit_share(tokenizer, ids, sample.task_id, *dbg), flush=True)
             else:
+                logits = model(input_ids=input_ids).logits[:, :-1]
                 loss = weighted_ce(logits, input_ids[:, 1:], w, ul_lambda=cfg.ul_lambda,
                                    norm_floor=cfg.w_norm_floor)
-            if cfg.anchor_kl_coef > 0.0:
-                # hold the distribution the objective does NOT teach: the gated
-                # modes credit ~20 of ~4000 positions and pay for their loss with
-                # 0.3 nats of anti-repetition prior per merge (policy_shift.py)
-                a_ids, a_logq = base_topk(model, input_ids, cfg.kl_topk)
-                free = (w == 0.0).float()
-                if float(free.sum()) > 0:
-                    anchor, _ = topk_kl(logits, a_ids, a_logq, free)
-                    loss = loss + cfg.anchor_kl_coef * anchor
-            (loss / micro_batch).backward()
-            losses.append(float(loss.detach()))
+                if cfg.anchor_kl_coef > 0.0:
+                    # hold the distribution the objective does NOT teach: the gated
+                    # modes credit ~20 of ~4000 positions and pay for their loss with
+                    # 0.3 nats of anti-repetition prior per merge (policy_shift.py)
+                    a_ids, a_logq = base_topk(model, input_ids, cfg.kl_topk)
+                    free = (w == 0.0).float()
+                    if float(free.sum()) > 0:
+                        anchor, _ = topk_kl(logits, a_ids, a_logq, free)
+                        loss = loss + cfg.anchor_kl_coef * anchor
+                (loss / micro_batch).backward()
+                loss_value = float(loss.detach())
+            losses.append(loss_value)
             step += 1
             if step % micro_batch == 0:
                 opt.step()

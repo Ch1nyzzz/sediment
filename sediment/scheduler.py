@@ -250,8 +250,9 @@ async def _stream(
             # serve_experience: the trajectory was GENERATED under served_block,
             # so that exact block -- not a rebuilt one carrying the own-outcome
             # summary -- is the teacher whose distribution we are matching.
+            own = traj if cfg.hindsight_include_own_outcome else None
             block = served_block or experience_mod.build_block(
-                retrieved, traj, cfg, query_text=_natural_task_text(task)
+                retrieved, own, cfg, query_text=_natural_task_text(task)
             )
             if not cfg.score_hindsight:  # corpus collection: nothing consumes the deltas
                 return None, block

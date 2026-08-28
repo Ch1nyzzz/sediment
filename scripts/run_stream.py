@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from sediment.config import StreamConfig
+from sediment.config import StreamConfig  # noqa: E402
 
 # argparse attribute -> StreamConfig field
 _FLAG_TO_FIELD = {
@@ -77,7 +77,10 @@ def build_engines(cfg: StreamConfig) -> list[Any]:
         cls = getattr(mod, "VllmClient", None) or getattr(mod, "VllmEngine")
         urls = cfg.extra.get("base_urls") or [
             f"http://127.0.0.1:{8000 + i}/v1" for i in range(cfg.num_engines)]
-        return [cls(u, cfg.model, lora_prefix=f"{cfg.run_id}-") for u in urls]
+        return [cls(u, cfg.model, max_context=cfg.max_model_len,
+                    generation_seed_mode=cfg.generation_seed_mode,
+                    generation_seed_salt=cfg.generation_seed_salt,
+                    lora_prefix=f"{cfg.run_id}-") for u in urls]
     raise SystemExit(f"unknown engine: {cfg.engine}")
 
 
@@ -93,19 +96,34 @@ def _load_rl_tasks(cfg: StreamConfig) -> tuple[list[dict], list[dict]]:
     """EnvScaler stream + G3 probe holdout from the corpus tail.
 
     Pool = tail (num_tasks + gate_probe_tasks); stream gets the head of it,
-    probes the rest. env_family is refined to the env prefix (env_188...) so
+    probes the rest (extra.corpus_slice=[a,b) restricts the corpus first, e.g.
+    [0,1700] = env<175 meta-train head). env_family is refined to the env prefix (env_188...) so
     buffer retrieval and the gate ledger see real families; each task carries
     its LOPD checkout for scheduler._make_env.
     """
     from sediment.envs.envscaler import list_tasks
 
     lopd = cfg.extra.get("lopd_dir", "/data/erv1n/resid/third_party/LOPD")
-    pool = list_tasks("rl", cfg.data_dir, third_party_dir=lopd)[
-        -(cfg.num_tasks + cfg.gate_probe_tasks):]
-    for t in pool:
+    corpus = list_tasks("rl", cfg.data_dir, third_party_dir=lopd)
+    for t in corpus:
         t["lopd_dir"] = lopd
         t["env_family"] = t["task_id"].rsplit("_rl-task_", 1)[0]
-    return pool[: cfg.num_tasks], pool[cfg.num_tasks:]
+    if "corpus_slice" in cfg.extra:  # [start, end): meta-train head instead of the tail pool
+        start, end = cfg.extra["corpus_slice"]
+        corpus = corpus[start:end]
+    keep = cfg.extra.get("keep_families")
+    if keep:
+        # Six of the seventeen tail families produced 1 success in 256 tasks
+        # under BOTH frozen and icl_refl (08-26): a third of the wall clock
+        # carrying none of the signal. Stratifying to the discriminative
+        # families is a change of pool, so absolute counts are not comparable
+        # with the full-tail runs -- and peers now come only from these
+        # families, which makes retrieval slightly richer too.
+        corpus = [t for t in corpus if t["env_family"] in set(keep)]
+    span = cfg.num_tasks + cfg.gate_probe_tasks
+    pool = corpus[-span:]
+    before = corpus[-span - cfg.probe_extra_before:-span] if cfg.probe_extra_before else []
+    return pool[: cfg.num_tasks], pool[cfg.num_tasks:] + before
 
 
 def main(argv: Optional[list[str]] = None) -> dict[str, Any]:
@@ -138,9 +156,49 @@ def main(argv: Optional[list[str]] = None) -> dict[str, Any]:
     else:
         tasks, probe_tasks = _load_rl_tasks(cfg)
     engines = build_engines(cfg)
-    buffer = Buffer(cfg.buffer_path)
+    from sediment.types import StreamRecord
+    prior: list = []
+    window_offset = 0
+    if cfg.resume and Path(cfg.buffer_path).exists():
+        buffer = Buffer.load(cfg.buffer_path)
+        firsts = [t for t in buffer._trajs if not t.is_retry]
+        done = (len(firsts) // cfg.window_size) * cfg.window_size  # whole windows only
+        # trajectories of a partial last window are dropped from the buffer view so
+        # the window is redone (records rebuilt from the persisted trajectories)
+        keep_ids = {id(t) for t in firsts[:done]}
+        buffer._trajs = [t for t in buffer._trajs if not (not t.is_retry and id(t) not in keep_ids)]
+        prior = [StreamRecord(task_id=t.task_id, window=i // cfg.window_size, adapter=t.adapter,
+                              success=t.success, reward=t.reward, meta={"env_family": t.env_family,
+                              "resumed": True}) for i, t in enumerate(firsts[:done])]
+        window_offset = done // cfg.window_size
+        tasks = tasks[done:]
+        print(f"[resume] {done} tasks / {window_offset} windows restored from buffer; "
+              f"current adapter {Registry(cfg.registry_dir).current().name}; {len(tasks)} tasks left",
+              flush=True)
+    else:
+        buffer = Buffer(cfg.buffer_path)
+    retrieval_buffer = None
+    if cfg.retrieval_buffer_paths:
+        retrieval_buffer = Buffer(run_dir / ".immutable-retrieval-view.jsonl")
+        for donor_path in cfg.retrieval_buffer_paths:
+            donor = Buffer.load(donor_path)
+            retrieval_buffer._trajs.extend(donor._trajs)
+        print(f"[memory] loaded {len(retrieval_buffer)} immutable trajectories from "
+              f"{len(cfg.retrieval_buffer_paths)} donor buffers", flush=True)
     gate = Gate(cfg)
     registry = Registry(cfg.registry_dir)
+    if cfg.initial_adapter_path:
+        if cfg.resume:
+            raise SystemExit("initial_adapter_path and resume are mutually exclusive")
+        if registry.current().name != "v0000":
+            raise SystemExit("initial_adapter_path requires an empty run registry")
+        adapter_path = Path(cfg.initial_adapter_path).resolve()
+        if not adapter_path.is_dir() or not (adapter_path / "adapter_config.json").is_file():
+            raise SystemExit(f"invalid initial_adapter_path: {adapter_path}")
+        initial = registry.publish(
+            str(adapter_path), parent="v0000", provenance=["initial_adapter"]
+        )
+        print(f"[initial adapter] {adapter_path} -> {initial.name}", flush=True)
 
     if probe_tasks:
         import dataclasses
@@ -151,18 +209,26 @@ def main(argv: Optional[list[str]] = None) -> dict[str, Any]:
         probe_cfg = dataclasses.replace(cfg, temperature=0.0)
 
         def run_probe(adapter_name: str, ptasks: list[dict]) -> float:
-            ok = 0
-            for t in ptasks:
-                traj = run_episode(engines[0], _make_env(t), t, probe_cfg,
-                                   adapter=adapter_name)
-                ok += int(bool(traj.success))
+            # G3 probes were the dominant per-window fixed cost (6-14 min
+            # sequential); run them concurrently across all engines.
+            from concurrent.futures import ThreadPoolExecutor
+
+            def one(i_t):
+                i, t = i_t
+                eng = engines[i % len(engines)]
+                return int(bool(run_episode(eng, _make_env(t), t, probe_cfg,
+                                            adapter=adapter_name).success))
+            with ThreadPoolExecutor(max_workers=max(1, len(ptasks))) as ex:
+                ok = sum(ex.map(one, enumerate(ptasks)))
             return ok / max(1, len(ptasks))
 
     records = stream_fn(tasks, engines, buffer, gate, train_candidate, registry,
                         cfg, run_probe=run_probe, probe_tasks=probe_tasks,
-                        on_window=_on_window)
+                        on_window=_on_window, window_offset=window_offset,
+                        retrieval_buffer=retrieval_buffer)
     if asyncio.iscoroutine(records):
         records = asyncio.run(records)
+    records = prior + list(records)
 
     summary = write_report(run_dir, cfg, records, registry)
     print(f"wrote {run_dir / 'stream.jsonl'} and {run_dir / 'summary.json'}")

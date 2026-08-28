@@ -353,6 +353,22 @@ def test_serve_experience_injects_block_into_first_attempt(stub_modules, tmp_pat
     assert all(r.meta["served_experience"] == [] for r in records)
 
 
+def test_pure_memory_hindsight_excludes_current_outcome(stub_modules, tmp_path, monkeypatch):
+    cfg = make_cfg(tmp_path)
+    cfg.hindsight_include_own_outcome = False
+    seen_own = []
+
+    def capture_block(retrieved, own, cfg, **kwargs):
+        seen_own.append(own)
+        return stub_build_block(retrieved, own, cfg, **kwargs)
+
+    monkeypatch.setattr(sys.modules["sediment.experience"], "build_block", capture_block)
+    run_stream(make_tasks(4), [ScriptedMockEngine()], StubBuffer(), StubGate(cfg),
+               stub_trainer, StubRegistry(), cfg)
+    assert len(seen_own) == 4
+    assert all(own is None for own in seen_own)
+
+
 def test_binary_mode_proposes_by_gate_count_not_surprise(stub_modules, tmp_path):
     cfg = make_cfg(tmp_path)
     cfg.weight_mode = "binary"

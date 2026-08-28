@@ -74,13 +74,16 @@ class Gate:
         behavioral_changed: Optional[float] = None
         g2_pass = True
         if replay_states:
-            changed = 0
-            for state in replay_states:
+            from concurrent.futures import ThreadPoolExecutor
+
+            def pair(state):  # parent vs candidate greedy action at one decision point
                 a = engine.generate(state, adapter=parent.name,
                                     temperature=0.0, max_tokens=cfg.max_tokens)
                 b = engine.generate(state, adapter=candidate.candidate_id,
                                     temperature=0.0, max_tokens=cfg.max_tokens)
-                changed += int(a != b)
+                return int(a != b)
+            with ThreadPoolExecutor(max_workers=len(replay_states)) as ex:
+                changed = sum(ex.map(pair, replay_states))
             behavioral_changed = changed / len(replay_states)
             g2_pass = behavioral_changed >= cfg.gate_min_behavior_change
             notes.append(
@@ -92,6 +95,7 @@ class Gate:
             notes.append("G2 skipped (no replay states), counts as pass")
 
         probe_delta: Optional[float] = None
+        cand_rate = parent_rate = None
         g3_pass = True
         if run_probe is not None and probe_tasks:
             cand_rate = run_probe(candidate.candidate_id, probe_tasks)
@@ -113,6 +117,8 @@ class Gate:
             magnitude=self._magnitude(),
             behavioral_changed=behavioral_changed,
             probe_delta=probe_delta,
+            probe_rate=cand_rate,
+            parent_rate=parent_rate,
             reason="; ".join(notes),
         )
 
