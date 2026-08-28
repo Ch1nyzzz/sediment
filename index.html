@@ -3,20 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sediment 实验汇报 — ICL 记忆形态与在线蒸馏内化</title>
+<title>sediment 实验汇报 — 不依赖 reward 的 test-time continual learning</title>
 <style>
   :root{
     color-scheme: light;
     --plane:#f9f9f7; --surface:#fcfcfb;
     --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
     --grid:#e1e0d9; --axis:#c3c2b7; --hair:rgba(11,11,11,0.10);
-    --accent:#2a78d6; --accent-soft:#86b6ef; --accent-wash:#e8f0fc;
-    --neutral:#c3c2b7; --neutral-2:#dedcd4;
+    --accent:#2a78d6; --accent-wash:#e8f0fc;
     --bar-hi:#2a78d6; --bar-dim:#898781;
     --dot-before:#86b6ef; --dot-after:#2a78d6;
     --good:#0ca30c; --good-text:#006300; --warning:#fab219;
     --serious:#ec835a; --critical:#d03b3b;
-    --maxw:1120px;
   }
   @media (prefers-color-scheme: dark){
     :root:not([data-theme="light"]){
@@ -24,8 +22,7 @@
       --plane:#0d0d0d; --surface:#1a1a19;
       --ink:#ffffff; --ink-2:#c3c2b7; --muted:#898781;
       --grid:#2c2c2a; --axis:#383835; --hair:rgba(255,255,255,0.10);
-      --accent:#3987e5; --accent-soft:#256abf; --accent-wash:#16233a;
-      --neutral:#4a4a46; --neutral-2:#38383a;
+      --accent:#3987e5; --accent-wash:#16233a;
       --bar-hi:#3987e5; --bar-dim:#898781;
       --dot-before:#256abf; --dot-after:#86b6ef;
       --good:#0ca30c; --good-text:#0ca30c;
@@ -36,8 +33,7 @@
     --plane:#0d0d0d; --surface:#1a1a19;
     --ink:#ffffff; --ink-2:#c3c2b7; --muted:#898781;
     --grid:#2c2c2a; --axis:#383835; --hair:rgba(255,255,255,0.10);
-    --accent:#3987e5; --accent-soft:#256abf; --accent-wash:#16233a;
-    --neutral:#4a4a46; --neutral-2:#38383a;
+    --accent:#3987e5; --accent-wash:#16233a;
     --bar-hi:#3987e5; --bar-dim:#898781;
     --dot-before:#256abf; --dot-after:#86b6ef;
     --good:#0ca30c; --good-text:#0ca30c;
@@ -47,348 +43,229 @@
   body{
     background:var(--plane); color:var(--ink);
     font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-    font-size:15px; line-height:1.72; -webkit-font-smoothing:antialiased;
+    font-size:15.5px; line-height:1.78; -webkit-font-smoothing:antialiased;
   }
-  .wrap{max-width:var(--maxw); margin:0 auto; padding:0 22px 96px}
-  header.top{padding:56px 0 26px; border-bottom:1px solid var(--hair); margin-bottom:34px}
+  .wrap{max-width:900px; margin:0 auto; padding:0 22px 96px}
+  header.top{padding:60px 0 26px; border-bottom:1px solid var(--hair); margin-bottom:8px}
   .eyebrow{font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); font-weight:600}
-  h1{font-size:31px; line-height:1.28; margin:12px 0 10px; font-weight:680; letter-spacing:-0.01em}
-  .sub{color:var(--ink-2); font-size:15px; max-width:78ch; margin:0}
-  .meta{margin-top:18px; display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center}
+  h1{font-size:32px; line-height:1.3; margin:12px 0 12px; font-weight:680; letter-spacing:-0.012em}
+  .sub{color:var(--ink-2); font-size:16px; margin:0}
+  .meta{margin-top:20px; display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center}
   .chip{font-size:12px; color:var(--ink-2); border:1px solid var(--hair); background:var(--surface);
         border-radius:999px; padding:3px 11px; white-space:nowrap}
   .theme-btn{margin-left:auto; font:inherit; font-size:12px; color:var(--ink-2); background:var(--surface);
     border:1px solid var(--hair); border-radius:999px; padding:4px 12px; cursor:pointer}
 
-  h2{font-size:21px; margin:52px 0 6px; font-weight:660; letter-spacing:-0.005em; scroll-margin-top:20px}
-  h2 .num{color:var(--muted); font-variant-numeric:tabular-nums; margin-right:10px; font-weight:600}
-  h3{font-size:16px; margin:30px 0 8px; font-weight:640}
-  p{margin:10px 0; color:var(--ink-2)}
-  p.lead{color:var(--ink); font-size:16px}
+  h2{font-size:22px; margin:56px 0 4px; font-weight:660; letter-spacing:-0.005em}
+  h2 .num{color:var(--muted); font-variant-numeric:tabular-nums; margin-right:12px; font-weight:600}
+  .h2sub{color:var(--muted); font-size:13.5px; margin:0 0 14px}
+  h3{font-size:16.5px; margin:32px 0 6px; font-weight:640}
+  p{margin:12px 0; color:var(--ink-2)}
+  p.lead{color:var(--ink); font-size:17px; line-height:1.7}
   strong{color:var(--ink); font-weight:640}
-  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.88em;
+  em{font-style:normal; color:var(--ink); border-bottom:1.5px solid var(--accent); padding-bottom:1px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em;
        background:var(--accent-wash); color:var(--ink); padding:1px 5px; border-radius:4px}
-  a{color:var(--accent)}
-  ul{margin:10px 0; padding-left:20px; color:var(--ink-2)}
-  li{margin:6px 0}
+  ul{margin:12px 0; padding-left:20px; color:var(--ink-2)}
+  li{margin:8px 0}
 
-  .kpis{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:26px 0 8px}
-  .kpi{background:var(--surface); border:1px solid var(--hair); border-radius:12px; padding:18px 18px 16px}
-  .kpi .k-label{font-size:12.5px; color:var(--muted); font-weight:600; letter-spacing:.02em}
-  .kpi .k-val{font-size:38px; font-weight:670; letter-spacing:-0.02em; line-height:1.12; margin-top:6px}
-  .kpi .k-delta{font-size:13px; margin-top:2px; font-weight:620}
-  .kpi .k-delta.up{color:var(--good-text)}
+  .steps{display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:26px 0 6px}
+  .step{background:var(--surface); border:1px solid var(--hair); border-radius:12px; padding:16px 16px 14px; position:relative}
+  .step .n{font-size:11.5px; font-weight:700; letter-spacing:.1em; color:var(--accent)}
+  .step h4{margin:6px 0 4px; font-size:15px; font-weight:640; color:var(--ink); line-height:1.45}
+  .step p{margin:0; font-size:13.5px; line-height:1.6}
+
+  .kpis{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:24px 0 6px}
+  .kpi{background:var(--surface); border:1px solid var(--hair); border-radius:12px; padding:18px}
+  .kpi .k-label{font-size:12.5px; color:var(--muted); font-weight:600}
+  .kpi .k-val{font-size:34px; font-weight:670; letter-spacing:-0.02em; line-height:1.15; margin-top:6px}
+  .kpi .k-val small{font-size:18px; color:var(--muted); font-weight:600}
+  .kpi .k-delta{font-size:13px; margin-top:2px; font-weight:620; color:var(--good-text)}
   .kpi .k-note{font-size:12.5px; color:var(--ink-2); margin-top:8px; line-height:1.55}
 
-  .card{background:var(--surface); border:1px solid var(--hair); border-radius:12px; padding:20px 20px 16px; margin:20px 0}
+  .card{background:var(--surface); border:1px solid var(--hair); border-radius:12px; padding:20px 20px 14px; margin:22px 0}
   .card > h4{margin:0 0 2px; font-size:15px; font-weight:640; color:var(--ink)}
-  .card > .cap{margin:0 0 14px; font-size:12.5px; color:var(--muted)}
-
-  table{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-numeric:tabular-nums; margin:6px 0 4px}
-  caption{caption-side:top; text-align:left; font-size:12.5px; color:var(--muted); padding-bottom:9px}
-  th,td{padding:8px 10px; text-align:left; border-bottom:1px solid var(--grid); vertical-align:baseline}
-  th{font-weight:620; color:var(--ink); font-size:12.5px; letter-spacing:.01em; white-space:nowrap}
-  td.num,th.num{text-align:right; white-space:nowrap}
-  tbody tr.hi td{background:var(--accent-wash)}
-  tbody tr:last-child td{border-bottom:none}
-  .tblwrap{overflow-x:auto; -webkit-overflow-scrolling:touch}
-
-  .pill{display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:620;
-        border-radius:999px; padding:1px 9px; border:1px solid var(--hair); white-space:nowrap}
-  .pill::before{content:""; width:7px; height:7px; border-radius:50%}
-  .pill.sig::before{background:var(--good)}
-  .pill.dir::before{background:var(--warning)}
-  .pill.null::before{background:var(--muted)}
-  .pill.bad::before{background:var(--critical)}
+  .card > .cap{margin:0 0 14px; font-size:12.5px; color:var(--muted); line-height:1.6}
 
   .callout{border-left:3px solid var(--accent); background:var(--accent-wash);
-           padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0}
+           padding:14px 18px; border-radius:0 8px 8px 0; margin:22px 0}
   .callout p{margin:4px 0; color:var(--ink)}
-  .callout.warn{border-left-color:var(--serious); background:transparent; border:1px solid var(--hair); border-left:3px solid var(--serious); border-radius:0 8px 8px 0}
+  .callout.plain{background:transparent; border:1px solid var(--hair); border-left:3px solid var(--serious); border-radius:0 8px 8px 0}
+  .callout.plain p{color:var(--ink-2)}
 
-  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:14px}
-  .fail{background:var(--surface); border:1px solid var(--hair); border-radius:12px; padding:16px 18px}
-  .fail h5{margin:0 0 4px; font-size:14px; font-weight:640}
-  .fail p{margin:0; font-size:13.5px; line-height:1.62}
+  table{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-numeric:tabular-nums; margin:4px 0}
+  th,td{padding:9px 10px; text-align:left; border-bottom:1px solid var(--grid)}
+  th{font-weight:620; color:var(--ink); font-size:12.5px; white-space:nowrap}
+  td.num,th.num{text-align:right; white-space:nowrap}
+  tbody tr:last-child td{border-bottom:none}
+  .tblwrap{overflow-x:auto}
 
   figure{margin:0}
   svg{display:block; width:100%; height:auto; overflow:visible}
-  .legend{display:flex; gap:16px; flex-wrap:wrap; align-items:center; font-size:12.5px; color:var(--ink-2); margin:2px 0 12px}
-  .legend span.sw{width:11px; height:11px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:-1px}
+  .legend{display:flex; gap:16px; flex-wrap:wrap; font-size:12.5px; color:var(--ink-2); margin:0 0 10px}
+  .legend .sw{width:11px; height:11px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:-1px}
 
   #tip{position:fixed; pointer-events:none; opacity:0; transition:opacity .09s ease;
        background:var(--ink); color:var(--plane); font-size:12px; line-height:1.5;
-       padding:7px 10px; border-radius:7px; max-width:280px; z-index:50; box-shadow:0 4px 14px rgba(0,0,0,.18)}
-  #tip b{color:var(--plane)}
-
-  footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--hair); font-size:12.5px; color:var(--muted)}
-  @media (max-width:860px){
-    .kpis{grid-template-columns:1fr} .grid2{grid-template-columns:1fr} h1{font-size:26px}
-  }
-  @media print{ body{background:#fff} .theme-btn{display:none} .card,.kpi,.fail{break-inside:avoid} }
+       padding:7px 10px; border-radius:7px; max-width:270px; z-index:50; box-shadow:0 4px 14px rgba(0,0,0,.18)}
+  footer{margin-top:66px; padding-top:22px; border-top:1px solid var(--hair); font-size:12.5px; color:var(--muted)}
+  @media (max-width:820px){ .kpis,.steps{grid-template-columns:1fr} h1{font-size:26px} }
+  @media print{ body{background:#fff} .theme-btn{display:none} .card,.kpi,.step{break-inside:avoid} }
 </style>
 </head>
 <body>
-<div id="tip" role="status" aria-live="polite"></div>
+<div id="tip"></div>
 <div class="wrap">
 
 <header class="top">
   <div class="eyebrow">sediment · 实验汇报</div>
-  <h1>ICL 记忆的最佳形态，以及把它蒸馏进参数能拿到多少</h1>
-  <p class="sub">主线：agent 部署任务流上，先确定“哪种上下文记忆真的有用”，再把这份记忆用在线蒸馏写进权重，使推理时<strong>不带任何记忆</strong>也能变强。本页汇总 2026-08-22 → 08-28 的可复算结论。</p>
+  <h1>不依赖 reward 的 test-time continual learning：<br>从 memory 出发，把它写进参数</h1>
+  <p class="sub">一条线：日常部署里既没有大数据量、也没有清晰 reward，所以持续学习的信号只能来自 memory 与环境反馈 → 先测出哪种 memory 最有用 → 再把「有记忆 vs 没记忆」的差异当作学习信号 → 在线蒸馏进权重。</p>
   <div class="meta">
     <span class="chip">Qwen3-4B-Instruct-2507（主）/ Qwen3-8B（复验）</span>
     <span class="chip">EnvScaler 工具调用任务流</span>
-    <span class="chip">一题一次 rollout · 无重试</span>
-    <span class="chip">双侧精确 McNemar 配对检验</span>
     <span class="chip">截至 2026-08-28</span>
     <button class="theme-btn" id="themeBtn" type="button">切换主题</button>
   </div>
 </header>
 
-<section id="summary">
-  <p class="lead">三句话结论：</p>
+<section>
+  <h2><span class="num">00</span>背景：为什么必须绕开 reward</h2>
+  <p class="lead">我们想做的是<strong>部署中持续变强</strong>：agent 在真实任务流上一边干活一边学。但日常使用场景有两个硬约束，直接排除了标准的 RL 路线。</p>
   <ul>
-    <li><strong>形态</strong>：生成前只注入 <strong>一条</strong> 已知成功、任务文本最相似的<strong>完整轨迹</strong>最好（101/512，无记忆基线 86）。把多条记忆／反思拼在一起一律更差，甚至<strong>显著差于完全不给记忆</strong>。</li>
-    <li><strong>时机</strong>：Recuris 式 call-time 拦截注入与词法 working-state 在 4B/8B 上都<strong>没有可开采增益</strong>；拦截是结构性有害的（模型把范例当“照做”而非“参考”）。</li>
-    <li><strong>内化</strong>：把这条记忆用 reverse-KL 在线蒸馏进 LoRA 后，在 9 个<strong>从未训练也从未被检索</strong>的家族上做 prompt-only 评测，450 题 80 → 90（+2.2pp，p=0.13）；训练流内 400 题 18 → 27（p=0.035）。</li>
+    <li><strong>数据量不够。</strong>部署流里一天几百条交互，不是 large-scale RL 那个量级，训不出策略。</li>
+    <li><strong>reward 不清晰。</strong>没有干净的打分函数，也不可能让人逐条标注；成败常常只有一个模糊的、事后的环境信号。</li>
   </ul>
+  <p>所以 test-time continual learning 的信号只能从两处来：<em>agent 自己积累的经验（memory）</em> 和 <em>环境反馈</em>。这条线就是顺着这个约束一步步走下来的——每一步都是上一步结论逼出来的。</p>
 
-  <div class="kpis">
-    <div class="kpi">
-      <div class="k-label">最佳 ICL 形态（512 池，salt0）</div>
-      <div class="k-val">101<span style="font-size:20px;color:var(--muted);font-weight:600">/512</span></div>
-      <div class="k-delta up">+15 vs frozen 86</div>
-      <div class="k-note">success-first rank1：先按 source 成功标签过滤，再按自然任务文本相似度取 1 条完整轨迹。配对 39/24，p=0.077；三个 request-seed 盐同向。</div>
+  <div class="steps">
+    <div class="step">
+      <div class="n">STEP 1</div>
+      <h4>memory 到底怎么用才有效？</h4>
+      <p>先不谈训练。把记忆放进上下文，测出哪种形态真的能提升成绩——找不到有效的形态，后面无从谈起。</p>
     </div>
-    <div class="kpi">
-      <div class="k-label">在线蒸馏 · 训练流（400 题）</div>
-      <div class="k-val">27<span style="font-size:20px;color:var(--muted);font-weight:600">/400</span></div>
-      <div class="k-delta up">+9 vs frozen 18</div>
-      <div class="k-note">predict-then-update：每题成绩由更新前权重打出。配对 12/3，精确 p=0.035。</div>
+    <div class="step">
+      <div class="n">STEP 2</div>
+      <h4>那这个提升本身就是学习信号</h4>
+      <p>同一份权重，读记忆 vs 不读记忆，行为差异就是「记忆教会了什么」。它不需要任何 reward 标注。</p>
     </div>
-    <div class="kpi">
-      <div class="k-label">内化后 held-out（450 题，不带记忆）</div>
-      <div class="k-val">90<span style="font-size:20px;color:var(--muted);font-weight:600">/450</span></div>
-      <div class="k-delta up">+10（17.8% → 20.0%）</div>
-      <div class="k-note">9 个未训练家族，两臂 prompt 完全相同、均无记忆块。配对 23/13，p=0.13：方向为正，未达显著。</div>
+    <div class="step">
+      <div class="n">STEP 3</div>
+      <h4>把这个差异蒸馏进参数</h4>
+      <p>用 reverse KL 在线写进 LoRA，让模型在<strong>不带记忆</strong>时也具备同样的行为。</p>
     </div>
   </div>
 </section>
 
-<section id="protocol">
-  <h2><span class="num">01</span>口径：所有数字用的是同一套协议</h2>
-  <p>下面每个成功数都来自<strong>相同的固定有序任务池</strong>、<strong>相同的裸 prompt request seed</strong>、<code>retry_on_fail=false</code>、每题只有一条 primary rollout；显著性一律用同一 task ID 上的双侧精确 McNemar。因此“86 vs 101”不是两个独立计数之差，而是同题配对的翻转。</p>
-  <div class="tblwrap">
-  <table>
-    <caption>数据与家族切分（EnvScaler，split=rl，共 2,550 题）</caption>
-    <thead><tr><th>用途</th><th>家族</th><th class="num">题量</th><th>说明</th></tr></thead>
-    <tbody>
-      <tr><td>不可变 donor bank（检索源）</td><td>env_141 – 174（34 家族）</td><td class="num">6,800 条轨迹</td><td>4 个 frozen 种子跑出来的只读历史；与目标家族零重叠</td></tr>
-      <tr><td>ICL 形态对比池</td><td>env_177+</td><td class="num">512</td><td>固定顺序、逐项核验 <code>exact_order_match=true</code></td></tr>
-      <tr><td>在线蒸馏训练流</td><td>env_175 – 182</td><td class="num">400（25 窗 × 16）</td><td>predict-then-update，窗口 W=16</td></tr>
-      <tr><td>held-out 测试</td><td>env_183 – 191（9 家族）</td><td class="num">450</td><td>既不训练也不被检索；评测时 <code>retrieval_k=0</code></td></tr>
-    </tbody>
-  </table>
-  </div>
-</section>
-
-<section id="icl">
-  <h2><span class="num">02</span>结论一：哪种 ICL 记忆最好用</h2>
-  <p class="lead">答案是<strong>一条</strong>，不是四条；是<strong>完整可执行的成功轨迹</strong>，不是压缩过的经验教训；筛选发生在<strong>生成之前</strong>，用的是 source 端本来就已知的成功标签。</p>
+<section>
+  <h2><span class="num">01</span>第一步的结论：一条完整的成功轨迹，胜过任何形式的多条</h2>
+  <p class="h2sub">512 题固定池，单次 rollout，不做任何训练——纯粹比较记忆的形态。</p>
 
   <div class="card">
-    <h4>512 题固定池，单 rollout、无训练（salt0）</h4>
-    <p class="cap">蓝色为最佳臂；虚线为无记忆基线 frozen = 86。所有臂共用同一 donor bank 与同一 request seed。</p>
+    <h4>把记忆放进上下文，成绩怎么变</h4>
+    <p class="cap">蓝色是最好的形态；虚线是完全不给记忆的基线。</p>
     <figure><div id="chart-icl"></div></figure>
   </div>
 
-  <div class="tblwrap">
-  <table>
-    <caption>各臂明细与相对 frozen 的配对检验</caption>
-    <thead><tr><th>臂</th><th>注入内容</th><th class="num">成功/512</th><th class="num">成功率</th><th class="num">精确 p</th><th>判定</th></tr></thead>
-    <tbody>
-      <tr><td>frozen</td><td>不注入任何记忆</td><td class="num">86</td><td class="num">16.8%</td><td class="num">—</td><td><span class="pill null">基线</span></td></tr>
-      <tr><td>lexical rank1</td><td>相似度 top-1 完整轨迹</td><td class="num">88</td><td class="num">17.2%</td><td class="num">0.899</td><td><span class="pill null">无差别</span></td></tr>
-      <tr><td>lexical rank4</td><td>相似度第 4 名完整轨迹</td><td class="num">92</td><td class="num">18.0%</td><td class="num">0.532</td><td><span class="pill null">无差别</span></td></tr>
-      <tr class="hi"><td><strong>success-first rank1</strong></td><td>成功过滤后按自然任务文本最相似，1 条完整轨迹（p50 6.2k 字符）</td><td class="num"><strong>101</strong></td><td class="num"><strong>19.7%</strong></td><td class="num">0.077</td><td><span class="pill dir">方向正，未显著</span></td></tr>
-      <tr><td>success top4 reflection-only</td><td>4 条成功反思并列</td><td class="num">69</td><td class="num">13.5%</td><td class="num">0.027</td><td><span class="pill bad">显著更差</span></td></tr>
-      <tr><td>success top4 compiled</td><td>4 个 source、8 条抽取式 lesson</td><td class="num">68</td><td class="num">13.3%</td><td class="num">0.041</td><td><span class="pill bad">显著更差</span></td></tr>
-      <tr><td>success top8 compiled</td><td>8 个 source、8 条 lesson</td><td class="num">61</td><td class="num">11.9%</td><td class="num">0.003</td><td><span class="pill bad">显著更差</span></td></tr>
-    </tbody>
-  </table>
-  </div>
-
-  <p>关键不是“101 比 68 多 33 题”，而是同题 discordance：success rank1 对 top4 reflection-only 是 48/16（p=7.7e-5），对 top4 compiled 58/25（p=3.8e-4），对 top8 compiled 59/19（p=6.4e-6）。而 top4 compiled 与 top4 reflection-only 之间是 29/28（p=1.0）——<strong>抽取式压缩器没有净修复任何东西</strong>；top4 与 top8 之间 30/23（p=0.41）——<strong>更深的 source 覆盖也没有收益</strong>。多条记忆的失败不是“太长被截断”（512/512 都完整注入且远低于 32k），是注意力稀释与跨环境规则冲突。</p>
-
-  <div class="card">
-    <h4>最佳臂的种子复现</h4>
-    <p class="cap">salt0 是发现盐（方案在它上面选定）；salt1/2 是固定方案后只跑 frozen 与最佳臂的确认盐。每格仍是一题一次 rollout。</p>
-    <div class="legend">
-      <span><span class="sw" style="background:var(--dot-before)"></span>frozen（无记忆）</span>
-      <span><span class="sw" style="background:var(--dot-after)"></span>success-first rank1</span>
-    </div>
-    <figure><div id="chart-salt"></div></figure>
-  </div>
-
-  <div class="callout warn">
-    <p><strong>诚实口径：</strong>两个确认盐都指向上方（+7 与 +19），但把同一 task 在两盐上的结果先聚合再做符号检验，是 44 题净受益 / 30 题净受损 / 438 持平，p=0.130。所以这是<strong>方向跨盐稳定的正向证据，不是已被独立确认的显著增益</strong>。三盐描述性平均 84 → 97.67（p=0.025）不能当独立确认，因为策略是用 salt0 选出来的。</p>
-  </div>
-
-  <h3>两个副产品结论</h3>
-  <ul>
-    <li><strong>top-n 里确实有被浪费的信息，但目前取不出来。</strong>rank1–4 各自单独注入是 88/84/85/92，四个 rank 的 oracle 并集是 <strong>137/512</strong>，远高于最佳单 rank。只用 source bank 训练的 reward-blind verifier 从 5 个候选里选一条能到 <strong>105/512</strong>（vs frozen 33/14，p=0.008），计算曲线 86/99/103/105/105 —— 但它<strong>每题要 5 次 actor rollout</strong>，不满足部署约束，只作为“rank 之间存在互补性”的诊断上界。</li>
-    <li><strong>历史“k=4 检索”其实一直是 top-1。</strong><code>experience.py</code> 的预算逻辑无条件放入第一条 peer，而单条 peer 渲染后中位 5,953 字符已超过 4,000 的块上限，第二条永远进不来：实测全流每题实际 peer 数为 {0: 16 题, 1: 784 题}，同族占 84.6%。也就是说旧的“最强朴素基线”是一个<strong>强同族 top-1</strong>，这与新实验的结论方向一致。matched legacy 96 vs matched frozen 81（41/26，p=0.086）。</li>
-  </ul>
-</section>
-
-<section id="timing">
-  <h2><span class="num">03</span>结论二：注入“时机”这条轴没有增益</h2>
-  <p>结论一说的是<em>注入什么</em>。Recuris（arXiv 2608.24876）主张经验记忆是 <em>invocation-conditional</em> 的——价值取决于<em>什么时候注入</em>。我们把它的两个机制原样移植：① call-time 单条注入（模型起草修改类工具调用时<strong>拦截不执行</strong>，回灌一条最相似的 donor 步骤让它重起草；报错时在观测末尾追加恢复步）；② 词法 working-state（目标账本，只有成功的写调用才能标记 done）。同池、同 bank、同协议。</p>
-
-  <div class="tblwrap">
-  <table>
-    <caption>512 题固定池，salt0；括号内为相对同模型 frozen 的双侧精确 p</caption>
-    <thead><tr><th>臂</th><th class="num">Qwen3-4B</th><th class="num">Qwen3-8B</th><th>读法</th></tr></thead>
-    <tbody>
-      <tr><td>frozen（无记忆）</td><td class="num">86</td><td class="num">93</td><td>基线</td></tr>
-      <tr><td>开头 1 条<strong>跨族</strong>成功轨迹</td><td class="num">101 <span style="color:var(--muted)">(0.077)</span></td><td class="num">98 <span style="color:var(--muted)">(0.62)</span></td><td>4B 有增益，8B 增益消失</td></tr>
-      <tr class="hi"><td>开头 1 条<strong>同族</strong>成功轨迹</td><td class="num">99 <span style="color:var(--muted)">(0.17)</span></td><td class="num"><strong>117 <span style="color:var(--muted)">(0.006)</span></strong></td><td>8B 上唯一显著正向，+24</td></tr>
-      <tr><td>call-time 拦截注入（跨族）</td><td class="num">22 <span style="color:var(--muted)">(6e-15)</span></td><td class="num">93 <span style="color:var(--muted)">(1.0)</span></td><td>4B 灾难，8B 纯搅动</td></tr>
-      <tr><td>call-time 仅报错追加（不拦截）</td><td class="num">80 <span style="color:var(--muted)">(0.39)</span></td><td class="num">100 <span style="color:var(--muted)">(0.25)</span></td><td>唯一无害的形态，但也没改变结局</td></tr>
-      <tr><td>working state（词法 checker）</td><td class="num">58 <span style="color:var(--muted)">(2e-4)</span></td><td class="num">66 <span style="color:var(--muted)">(0.003)</span></td><td>两个尺度上都显著有害</td></tr>
-    </tbody>
-  </table>
-  </div>
-
-  <p><strong>为什么拦截会崩（取证，不是猜测）。</strong>4B 上拦截后 72% 的重起草改了动作，但改的方向是错的：跨族 donor 时它把写操作换成查询（<code>cancel_reservation</code> → <code>get_hospital_by_name</code>）并且相当一部分写操作再也没补回来——论文最在意的 omitted-write 反而被我们制造出来。把拦截语从“未执行，请对照”改成“已排队，请重发”后是 42/512，仍然显著更差，<strong>问题不在措辞</strong>。换成同族 bank 更狠（17/512）：82% 的重起草直接照抄 donor 那一步的工具，44 次连参数值一起抄。8B 上则是另一种失败——93% 的重起草原样重发同一调用，hint 被彻底无视，只剩下错误数 1526 vs 1075 的搅动。</p>
-  <p><strong>working state 的病是 checker 不准 + 强制完成</strong>：通用词法 checker 只能把 49% 的目标标成 done，footer 又要求“每条目标都要有成功写回执才能结束”，于是模型对已完成但仍标 pending 的目标重复写，重复写 403 vs 47、撞 30 步 80 vs 7。Recuris 的 working-state 增益（+23.9）靠的是<strong>演化出来的领域特定 checker</strong>，那是我们无法免费获得的一层。</p>
-
+  <p><strong>最好的形态是「生成之前先筛，只注入一条」</strong>：用<em>环境已经给过的成败标签</em>先把失败的经验过滤掉，再按任务相似度取<strong>一条完整的、可执行的成功轨迹</strong>，原样放进首条消息。这比不给记忆多出 15 题。</p>
+  <p><strong>而把多条记忆拼在一起，一律更差，甚至差过完全不给记忆。</strong>并列 4 条成功反思、把它们压缩成 lesson、扩到 8 条覆盖更多来源——三种做法全部低于基线。不是因为太长被截断（内容都完整注入，远没到上下文上限），而是多条跨环境的经验互相冲突，模型拿到的是彼此矛盾的行动先验。</p>
   <div class="callout">
-    <p><strong>模型越强，越靠“同族的具体经验”。</strong>8B 上跨族块的增益消失（+5，p=0.62）而同族块成为唯一显著正向（+24，p=0.006，增益分散在 env_179/183/185/189/191，不是单族驱动）。这直接回答了此前悬而未决的 E-cross 问题：<strong>8B 的可用 ICL 教师信号来自 within-family 记忆</strong>，跨族 bank 在 8B 上没有教师优势。评测流因此必须按家族交错排，否则 within-family 适应也能撑出曲线增益，得到“正结果 + 错误归因”。</p>
+    <p><strong>这一步的可迁移结论：</strong>记忆的价值来自<strong>筛选</strong>，不是来自<strong>数量</strong>。该在生成前用已知信号选出一条可信的，而不是把检索到的都塞给模型。</p>
   </div>
 </section>
 
-<section id="distill">
-  <h2><span class="num">04</span>结论三：把这条记忆蒸馏进参数，能拿到多少</h2>
-  <p class="lead">如果记忆的价值只能靠推理时塞进上下文兑现，那它每题都要付 6k 字符的成本，而且换个家族就失效。真正要证的是：<strong>能不能把它写进权重，使推理时不带记忆也变强，并迁移到没训练过的家族。</strong></p>
+<section>
+  <h2><span class="num">02</span>第二步的结论：这个提升可以直接当学习信号，不需要 reward</h2>
+  <p class="lead">既然「带一条记忆」能稳定提升成绩，那么<strong>同一份权重、读记忆与不读记忆之间的行为差异</strong>，本身就编码了这条记忆教会了什么。把它当作训练目标，全程不需要任何人工 reward。</p>
 
   <div class="card">
-    <h4>方法：mean16 reverse-KL 自蒸馏（无 compiler、无额外模型）</h4>
-    <div class="tblwrap">
-    <table>
-      <thead><tr><th>环节</th><th>设置</th><th>为什么是这个</th></tr></thead>
-      <tbody>
-        <tr><td>学生</td><td>裸 rollout：prompt-only，不给任何记忆</td><td>它同时是<strong>在线成绩</strong>与<strong>on-policy 状态分布</strong>——流曲线本身就是内化度量，不需要另设评测</td></tr>
-        <tr><td>教师</td><td>同一份权重，读 prompt + 1 条 success-first rank1 完整轨迹，<strong>在学生自己的轨迹上打分</strong></td><td>自蒸馏，目标永不陈旧；不需要第二次 actor rollout</td></tr>
-        <tr><td>目标</td><td><strong>reverse KL(student ‖ teacher)</strong>，top-k=20</td><td>部署时模型跑的是 prompt-only，期望必须在学生分布下取。教师采样轨迹上的 forward KL 实测只有 0.008 nats——在教师自己的状态上，它说的话学生本来就会说</td></tr>
-        <tr><td>credit 范围</td><td><strong>每个 action token 都是 KL 位置</strong>（<code>weight_mode=sft</code>），不是只有过门的 ~20 个 tool-call 内部 token</td><td>门控臂留下 4000 个无约束位置，每次合并烧掉 0.3 nats 的抗重复先验——这是此前所有崩溃的共同点</td></tr>
-        <tr><td>防遗忘</td><td><code>anchor_kl_coef=0.5</code> 把未教位置锚回 base；<code>grounded_weight=0.2</code> 抑制可从上下文抄的参数值</td><td>侵蚀正是骑在“可复制参数值”这个通道上</td></tr>
-        <tr><td>写入</td><td>LoRA r8/α8，lr 1.5e-4，EMA merge α=0.5，每窗 ≤16 个候选样本，1 epoch</td><td>P1.7 剂量曲线的膝点</td></tr>
-      </tbody>
-    </table>
-    </div>
+    <h4>学习信号是怎么构造的</h4>
+    <p class="cap">教师和学生是<strong>同一个模型的同一份权重</strong>，唯一区别是教师多读了一条记忆；教师只是在学生自己写出来的轨迹上重新打一次分，不需要第二次 rollout。</p>
+    <figure><div id="diagram"></div></figure>
   </div>
 
-  <div class="grid2">
-    <div class="card" style="margin:0">
-      <h4>训练流内（400 题，env_175–182）</h4>
-      <p class="cap">predict-then-update：每题的成绩由更新前的权重打出，更新只惠及它之后的题。</p>
-      <table>
-        <tbody>
-          <tr><td>frozen（同题、同序、同 seed）</td><td class="num">18 / 400（4.50%）</td></tr>
-          <tr><td><strong>mean16 reverse-KL</strong></td><td class="num"><strong>27 / 400（6.75%）</strong></td></tr>
-          <tr><td>配对 discordance</td><td class="num">12 / 3</td></tr>
-          <tr><td>双侧精确 p</td><td class="num"><strong>0.035</strong> <span class="pill sig">显著</span></td></tr>
-        </tbody>
-      </table>
+  <p><strong>为什么是 reverse KL。</strong>部署时模型跑的是 prompt-only，所以期望必须在<em>学生自己的状态分布</em>上取。反过来做（在教师生成的轨迹上算 forward KL）实测只有 0.008 nats——在教师自己写的轨迹上，它说的话学生本来就会说，几乎没有信号。</p>
+  <p><strong>为什么不是「挑出好 token 做 SFT」。</strong>早期版本用阈值门选出「变好的 token」再做交叉熵。在同一批 token 上把两个目标各算一次：交叉熵均值 0.365，KL 均值 3.538——<strong>门选出来的正是模型已经会做的事，梯度接近零</strong>。那条贴着基线的平线不是学坏了，是根本没学。换成 KL 之后信号大了约十倍。</p>
+  <p><strong>环境反馈用在哪。</strong>只用在检索侧：哪条历史经验算「成功」由环境自己给出，用来过滤 donor。训练目标里没有任何标量 reward，也不需要成败二值化。</p>
+</section>
+
+<section>
+  <h2><span class="num">03</span>第三步的结论：确实写进去了，而且能迁移</h2>
+  <p class="h2sub">在线学习：任务边推边学，每题的成绩由更新前的权重打出；测试集是从未训练、也从未被检索过的另外 9 个环境家族，评测时<strong>不给任何记忆</strong>。</p>
+
+  <div class="kpis">
+    <div class="kpi">
+      <div class="k-label">在线任务流（400 题）</div>
+      <div class="k-val">27<small> / 400</small></div>
+      <div class="k-delta">对照 18 · 显著（p=0.035）</div>
+      <div class="k-note">边服务边学，成绩由更新前权重打出。</div>
     </div>
-    <div class="card" style="margin:0">
-      <h4>held-out（450 题，env_183–191，prompt-only）</h4>
-      <p class="cap">9 个既没训练过、也从未被检索到的家族；两臂 prompt 完全相同，都不带记忆块，差别只有 LoRA。</p>
-      <table>
-        <tbody>
-          <tr><td>frozen</td><td class="num">80 / 450（17.78%）</td></tr>
-          <tr><td><strong>最终 adapter v0025</strong></td><td class="num"><strong>90 / 450（20.00%）</strong></td></tr>
-          <tr><td>配对 discordance</td><td class="num">23 / 13</td></tr>
-          <tr><td>双侧精确 p</td><td class="num">0.132 <span class="pill dir">方向正</span></td></tr>
-        </tbody>
-      </table>
+    <div class="kpi">
+      <div class="k-label">未见家族测试（450 题，不带记忆）</div>
+      <div class="k-val">90<small> / 450</small></div>
+      <div class="k-delta">对照 80 · +2.2 个百分点</div>
+      <div class="k-note">两臂 prompt 完全相同、都不带记忆块，差别只有学到的 LoRA。</div>
+    </div>
+    <div class="kpi">
+      <div class="k-label">增益的分布</div>
+      <div class="k-val">8<small> / 9 家族</small></div>
+      <div class="k-delta">不降，唯一回退 −1 题</div>
+      <div class="k-note">不是单个家族撑出来的结果。</div>
     </div>
   </div>
 
   <div class="card">
-    <h4>held-out 增益按家族分解</h4>
-    <p class="cap">9 个家族各 50 题，横轴为该族成功数。8/9 家族 ≥ 0，唯一回退是 env_185（−1）；合计 80 → 90（+10，配对 23/13，p=0.132）——增益不是单一家族驱动。</p>
+    <h4>两处增益的量级一致</h4>
+    <p class="cap">纵轴两行分别是在线流与未见家族测试集，横轴为成功率。</p>
     <div class="legend">
-      <span><span class="sw" style="background:var(--dot-before)"></span>frozen</span>
-      <span><span class="sw" style="background:var(--dot-after)"></span>内化后（不带记忆）</span>
+      <span><span class="sw" style="background:var(--dot-before)"></span>学习前</span>
+      <span><span class="sw" style="background:var(--dot-after)"></span>学习后（推理时不带记忆）</span>
     </div>
-    <figure><div id="chart-family"></div></figure>
+    <figure><div id="chart-gain"></div></figure>
   </div>
 
   <div class="callout">
-    <p><strong>量级怎么读。</strong>ICL 把记忆放在上下文里、每题付 6.2k 字符，在 512 池上拿到 +15（+2.9pp）。蒸馏之后<strong>推理端零额外 context</strong>，在 450 题未见家族上拿到 +10（+2.2pp）。两者任务池不同、不能直接相除，但量级是同一档：<strong>上下文里的增益有相当一部分确实被写进了权重，并且跨家族迁移了</strong>。这是本项目第一次拿到“内化 + 迁移”同时成立的证据。</p>
+    <p><strong>这一步真正证明的事：</strong>放在上下文里、每题要付 6k 字符成本的那份增益，有相当一部分被<strong>写进了权重</strong>——推理端零额外开销，而且<strong>迁移到了训练时没见过的环境家族</strong>。这是这条线第一次同时拿到「内化」和「迁移」。</p>
   </div>
-  <div class="callout warn">
-    <p><strong>限制：</strong>单种子、单模型尺度、held-out p=0.132 未达显著；训练流的 p=0.035 是在成功率仅 4.5% 的难段上取得的（27 vs 18，绝对量小）。8B 原生复验正在跑（见第 6 节）。</p>
-  </div>
-</section>
-
-<section id="why">
-  <h2><span class="num">05</span>为什么目标函数长这样：五个被证伪的设计</h2>
-  <p>上面那套目标函数不是选出来的，是被五次失败逼出来的。每一条都有独立取证。</p>
-
-  <div class="grid2">
-    <div class="fail">
-      <h5>① δ 门在训模型做它已经会的事</h5>
-      <p>同一批 314 个过门 token 上两个目标各算一次：<strong>CE 均值 0.365 nats vs KL 均值 3.538 nats</strong>。那条贴着 frozen 的平线不是“学坏了”，是<strong>梯度≈0，根本没学</strong>。KL 约 10× 信号 —— 目标函数从 CE 换成 full/reverse-KL 的直接依据。</p>
-    </div>
-    <div class="fail">
-      <h5>② 无门控累积必崩，先涨后崩</h5>
-      <p>160 题流上 ng 臂前 5 窗 12 vs 8 领先，w4 毒合并后探针 0.75 → 0.17，w5–6 的 32 题<strong>全部撞满 30 步、reward 0</strong>（“循环查询永不结算”）。此前 48 题冒烟的 W-AUC 0.700 是<strong>崩溃前的截断</strong>。</p>
-    </div>
-    <div class="fail">
-      <h5>③ 毒源是观测通道，不是失败轨迹</h5>
-      <p>两次独立毒合并、从同一父版本训三个变体各测 12 探针：obs-only 0.167/0.167、act-only 0.667/0.583、both 0.250/0.083（父 0.417）。<strong>观测 CE 把病人档案、log_id 这类实例数据背进了权重</strong>，且策略与世界模型共用同一个 4B LM 时会泄漏进策略。→ <code>train_channels=act</code>。</p>
-    </div>
-    <div class="fail">
-      <h5>④ 剂量与证据脱钩 / 负信用落在框架 token</h5>
-      <p>加权平均损失让证据质量只有 0.6–1.7 单位的样本驱动满剂量更新（act-only loss 四步从 4 掉到 0.001）→ 加 <code>w_norm_floor</code>。负信用一旦落到 <code>&lt;tool_call&gt;</code>／JSON 键上，模型会退化成<strong>只叙述不调用工具</strong>→ 语义掩码：框架 token 任何符号都不给信用。</p>
-    </div>
-    <div class="fail">
-      <h5>⑤ meta 参数 compiler 的预注册试点未通过</h5>
-      <p>“把一个 16 条记忆窗口学成低维 LoRA 更新”的 family-held-out 试点：<strong>三条中心判据全部失败</strong>，且部署门拒绝了全部 24 个测试预测（<code>write_rate=0</code>，系数恒为 0，合成 adapter 与参考张量<strong>逐位相等</strong>）。因此观察到的 stable/shuffled 正增益<strong>不可能来自任何学到的更新</strong>，它测的是同一份参数两次评测之间的重放噪声。结论：安全 no-op 行为按设计工作，但该学习器没有提取到有用的记忆依赖更新——路线已回滚，不做放大。</p>
-    </div>
-    <div class="fail">
-      <h5>⑥ lesson compiler 路线已弃</h5>
-      <p>“memory → RULE/AVOID/TEMPLATE lesson → 教师 → KL”这条线不再是主线：learned hint 只是“更好的教师构造”，与既有工作同轴竞争；且抽取式 compiler 在 512 池上被实测证明<strong>没有净修复</strong>（top4 compiled 68 vs top4 原文 69，29/28，p=1.0）。当前主臂<strong>完全不用 compiler</strong>。</p>
-    </div>
+  <div class="callout plain">
+    <p><strong>口径要说清楚：</strong>未见家族上的 +10 题方向为正但未达统计显著（p=0.13）；在线流的显著结果是在成功率仅 4.5% 的难段上取得的，绝对量不大。目前是单种子、单一模型尺度，8B 上的复验正在跑。</p>
   </div>
 </section>
 
-<section id="now">
-  <h2><span class="num">06</span>现状与下一步</h2>
+<section>
+  <h2><span class="num">04</span>路上确认掉的几件事</h2>
+  <p class="h2sub">这些都是负结果，但它们决定了方法长成现在这样。</p>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>试过什么</th><th>结论</th></tr></thead>
+    <tbody>
+      <tr><td><strong>在关键时刻才注入记忆</strong>（模型要动手改数据时打断它，回灌一条相似的历史步骤）</td>
+          <td>显著有害。模型把示范当成「照做」而不是「参考」：要么放弃写操作改去查询，要么直接抄示范里的工具和参数。换措辞、换同族来源都救不回来。<strong>有用的是「注入什么」，不是「什么时候注入」。</strong></td></tr>
+      <tr><td><strong>通用的目标完成度追踪</strong>（维护一个任务清单，只有成功写操作才算完成）</td>
+          <td>显著有害。通用判定只能识别一半的完成情况，剩下的假「未完成」逼着模型反复重写，直接把任务打崩。这类机制要靠领域专用的判定器，我们拿不到。</td></tr>
+      <tr><td><strong>不加约束地持续累积更新</strong></td>
+          <td>先涨后崩。早期窗口领先，一次坏的合并之后模型进入「循环查询、永不结算」，后续任务全部撞满步数上限。短跑出来的漂亮曲线是崩溃前的截断。</td></tr>
+      <tr><td><strong>让训练也吃观测 token</strong></td>
+          <td>这是崩溃的主要毒源：模型把病人档案、日志 ID 这类实例数据背进了权重。策略和世界模型共用同一个模型时，观测侧的损失会泄漏进策略。现在只在动作 token 上学。</td></tr>
+      <tr><td><strong>先把记忆编译成精炼的经验条目再用</strong></td>
+          <td>没有净收益（压缩后的版本与原文并列打平，都低于单条完整轨迹）。当前方法因此<strong>不含任何 compiler</strong>，直接用原始轨迹。</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>另外一个有意思的观察：<strong>模型越强，越依赖同环境的具体经验。</strong>在 8B 上，跨环境的通用记忆增益消失，而同环境记忆成为唯一显著的正向（+24 题）。这意味着评测必须打乱环境顺序，否则「同环境内的快速适应」会伪装成「跨环境迁移」。</p>
+</section>
+
+<section>
+  <h2><span class="num">05</span>下一步</h2>
   <ul>
-    <li><strong>在跑：</strong>Qwen3-8B 原生复验流水线。单个 model-native 记忆 bank（seed 0，目标 1,700 条轨迹）→ frozen 400/450 对照 → 25 窗 mean16 reverse-KL 在线训练 → held-out 450 配对。全程 <code>enable_thinking=false</code>，已核验 0 个 <code>&lt;think&gt;</code> 块。这条线要回答的是：4B 上的 +2.2pp 是不是小模型特有的。</li>
-    <li><strong>要补的口径：</strong>多种子 × 多流序（流式方法对任务顺序敏感，单一顺序的曲线不可信）；held-out 的 p=0.132 需要更多题量或更多盐才能收敛判定。</li>
-    <li><strong>记忆侧的下一步：</strong>8B 的结果说明教师信号在<strong>同族</strong>记忆里。若确认，评测流必须改成家族交错排，否则 within-family 适应会伪装成跨族迁移。</li>
-    <li><strong>不再做：</strong>拦截式 call-time 注入、通用词法 working-state、多条 lesson 拼接、lesson compiler、当前形态的 meta 参数 compiler。</li>
-  </ul>
-</section>
-
-<section id="caveats">
-  <h2><span class="num">07</span>已知限制</h2>
-  <ul>
-    <li><strong>不是端到端共同随机数。</strong>request seed 只固定裸 prompt 的采样种子；vLLM online 模式默认不保证复现（两次 frozen 跑在固定 512 上有 26 个首响应、9 个成功、80 个 dense reward 不一致）。配对检验里仍含残余采样噪声。</li>
-    <li><strong>oracle 数字不是成绩。</strong>rank1–4 并集 137/512、五候选并集 145/512 都是上界；105/512 的 verifier 需要 5× rollout，不满足“每题一次 rollout”的部署约束。</li>
-    <li><strong>发现盐 ≠ 确认盐。</strong>salt0 上的一切都是发现；只有 salt1/2 是确认，而确认集聚合尚未达到 0.05。</li>
-    <li><strong>有效样本量小于名义样本量。</strong>早期 200 题池的区分度几乎全部来自一个家族（名义 n=200，有效 n≈50）。这是后来把池扩到 512 并按家族分解报告的原因。</li>
+    <li><strong>8B 原生复验正在跑</strong>：完整重跑记忆库 → 在线学习 → 未见家族测试，回答 4B 上的 +2.2pp 是不是小模型特有的。</li>
+    <li><strong>补齐口径</strong>：多种子、多任务顺序（流式方法对顺序敏感，单一顺序的曲线不可信）；把未见家族上的结论推到显著。</li>
+    <li><strong>记忆侧</strong>：既然强模型的教师信号来自同环境记忆，评测流要改成环境交错排，避免正结果 + 错误归因。</li>
   </ul>
 </section>
 
 <footer>
-  <p>数据来源：<code>docs/ICL_CROSS_FAMILY_EXPERIMENTS.md</code>、<code>docs/CALLTIME_HARNESS_EXPERIMENT.md</code>、<code>docs/EXPERIMENTS.md</code>、<code>results/icl-memory-max-20260826/</code>，以及 <code>results/mean16_online_heldout_20260827/{heldout,online_train_vs_frozen}_comparison.json</code>。原始轨迹、worker 日志与 adapter 不入库。</p>
+  <p>所有对比均为同题配对：相同的固定有序任务池、相同的采样种子、每题只有一次 rollout、无重试；显著性用同一任务 ID 上的双侧精确检验。原始轨迹与日志不入库。</p>
   <p>sediment · Qwen3-4B-Instruct-2507 / Qwen3-8B · 生成于 2026-08-28</p>
 </footer>
 
@@ -397,10 +274,10 @@
 <script>
 (function(){
   var root=document.documentElement, btn=document.getElementById('themeBtn');
-  try{ var s=localStorage.getItem('sed-theme'); if(s) root.setAttribute('data-theme',s); }catch(e){}
+  try{ var st=localStorage.getItem('sed-theme'); if(st) root.setAttribute('data-theme',st); }catch(e){}
   btn.addEventListener('click',function(){
     var cur=root.getAttribute('data-theme');
-    if(!cur){ cur = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light'; }
+    if(!cur) cur = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light';
     var next = cur==='dark' ? 'light':'dark';
     root.setAttribute('data-theme',next);
     try{ localStorage.setItem('sed-theme',next); }catch(e){}
@@ -409,129 +286,141 @@
   var tip=document.getElementById('tip');
   function showTip(html,ev){
     tip.innerHTML=html; tip.style.opacity='1';
-    var x=ev.clientX+14, y=ev.clientY+16;
-    var r=tip.getBoundingClientRect();
+    var x=ev.clientX+14, y=ev.clientY+16, r=tip.getBoundingClientRect();
     if(x+r.width>innerWidth-10) x=ev.clientX-r.width-14;
     if(y+r.height>innerHeight-10) y=ev.clientY-r.height-14;
     tip.style.left=x+'px'; tip.style.top=y+'px';
   }
-  function hideTip(){ tip.style.opacity='0'; }
   function bind(el,html){
     el.addEventListener('mousemove',function(ev){ showTip(html,ev); });
-    el.addEventListener('mouseleave',hideTip);
-    el.setAttribute('tabindex','0');
-    el.addEventListener('focus',function(){ tip.innerHTML=html; });
+    el.addEventListener('mouseleave',function(){ tip.style.opacity='0'; });
   }
   var NS='http://www.w3.org/2000/svg';
   function mk(n,a){ var e=document.createElementNS(NS,n); for(var k in a) e.setAttribute(k,a[k]); return e; }
   function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
-  function rightRounded(x,y,w,h,r){
-    r=Math.min(r,w);
-    return 'M'+x+','+y+'h'+(w-r)+'a'+r+','+r+' 0 0 1 '+r+','+r+'v'+(h-2*r)+
-           'a'+r+','+r+' 0 0 1 '+(-r)+','+r+'h'+(-(w-r))+'z';
-  }
+  function rr(x,y,w,h,r){ r=Math.min(r,w);
+    return 'M'+x+','+y+'h'+(w-r)+'a'+r+','+r+' 0 0 1 '+r+','+r+'v'+(h-2*r)+'a'+r+','+r+' 0 0 1 '+(-r)+','+r+'h'+(-(w-r))+'z'; }
 
-  /* ---------- chart 1: emphasis bar ---------- */
   function barChart(mount, opts){
-    var d=opts.data, L=opts.labelW||210, R=64, W=760, rowH=34, top=26, bot=26;
+    var d=opts.data, L=opts.labelW, R=56, W=720, rowH=36, top=30, bot=26;
     var H=top+d.length*rowH+bot;
     var svg=mk('svg',{viewBox:'0 0 '+W+' '+H, role:'img','aria-label':opts.aria});
-    var x0=L, x1=W-R, max=opts.max, sx=function(v){ return x0+(v/max)*(x1-x0); };
-    var ticks=opts.ticks;
-    ticks.forEach(function(t){
+    var x0=L, x1=W-R, sx=function(v){ return x0+(v/opts.max)*(x1-x0); };
+    opts.ticks.forEach(function(t){
       svg.appendChild(mk('line',{x1:sx(t),x2:sx(t),y1:top-8,y2:top+d.length*rowH+2,stroke:css('--grid'),'stroke-width':1}));
       var tx=mk('text',{x:sx(t),y:top+d.length*rowH+18,'text-anchor':'middle','font-size':11,fill:css('--muted')});
       tx.textContent=t; svg.appendChild(tx);
     });
     d.forEach(function(row,i){
-      var y=top+i*rowH, bh=18, by=y+(rowH-bh)/2;
-      var color = row.hi ? css('--bar-hi') : css('--bar-dim');
-      var g=mk('g',{});
-      g.appendChild(mk('path',{d:rightRounded(x0,by,Math.max(sx(row.v)-x0,2),bh,4),fill:color}));
-      var lab=mk('text',{x:x0-12,y:by+13,'text-anchor':'end','font-size':12.5,
-        fill: row.hi?css('--ink'):css('--ink-2'),'font-weight':row.hi?'640':'400'});
+      var y=top+i*rowH, bh=19, by=y+(rowH-bh)/2, g=mk('g',{});
+      g.appendChild(mk('path',{d:rr(x0,by,Math.max(sx(row.v)-x0,2),bh,4),fill:row.hi?css('--bar-hi'):css('--bar-dim')}));
+      var lab=mk('text',{x:x0-12,y:by+14,'text-anchor':'end','font-size':13,
+        fill:row.hi?css('--ink'):css('--ink-2'),'font-weight':row.hi?'640':'400'});
       lab.textContent=row.label; g.appendChild(lab);
-      var val=mk('text',{x:sx(row.v)+9,y:by+13,'font-size':12.5,'font-variant-numeric':'tabular-nums',
+      var val=mk('text',{x:sx(row.v)+9,y:by+14,'font-size':13,'font-variant-numeric':'tabular-nums',
         fill:row.hi?css('--ink'):css('--ink-2'),'font-weight':row.hi?'660':'500'});
       val.textContent=row.v; g.appendChild(val);
-      bind(g,'<b>'+row.label+'</b><br>'+row.v+' / 512 成功（'+(row.v/5.12).toFixed(1)+'%）<br>'+row.note);
+      bind(g,'<b>'+row.label+'</b><br>'+row.v+' / 512 成功<br>'+row.note);
       svg.appendChild(g);
     });
-    if(opts.baseline!=null){
-      var bx=sx(opts.baseline);
-      svg.appendChild(mk('line',{x1:bx,x2:bx,y1:top-14,y2:top+d.length*rowH+2,
-        stroke:css('--ink-2'),'stroke-width':1.5,'stroke-dasharray':'4 4'}));
-      var bl=mk('text',{x:bx,y:top-20,'text-anchor':'middle','font-size':11.5,fill:css('--ink-2'),'font-weight':'600'});
-      bl.textContent='frozen 基线 '+opts.baseline; svg.appendChild(bl);
-    }
+    var bx=sx(opts.baseline);
+    svg.appendChild(mk('line',{x1:bx,x2:bx,y1:top-16,y2:top+d.length*rowH+2,
+      stroke:css('--ink-2'),'stroke-width':1.5,'stroke-dasharray':'4 4'}));
+    var bl=mk('text',{x:bx,y:top-22,'text-anchor':'middle','font-size':11.5,fill:css('--ink-2'),'font-weight':'600'});
+    bl.textContent='不给记忆 = '+opts.baseline; svg.appendChild(bl);
     mount.innerHTML=''; mount.appendChild(svg);
   }
 
-  /* ---------- chart 2/3: dumbbell ---------- */
   function dumbbell(mount, opts){
-    var d=opts.data, L=opts.labelW||130, R=58, W=760, rowH=opts.rowH||34, top=22, bot=28;
+    var d=opts.data, L=opts.labelW, R=70, W=720, rowH=48, top=24, bot=28;
     var H=top+d.length*rowH+bot;
     var svg=mk('svg',{viewBox:'0 0 '+W+' '+H, role:'img','aria-label':opts.aria});
-    var x0=L, x1=W-R, min=opts.min, max=opts.max;
-    var sx=function(v){ return x0+((v-min)/(max-min))*(x1-x0); };
+    var x0=L, x1=W-R, sx=function(v){ return x0+((v-opts.min)/(opts.max-opts.min))*(x1-x0); };
     opts.ticks.forEach(function(t){
       svg.appendChild(mk('line',{x1:sx(t),x2:sx(t),y1:top-6,y2:top+d.length*rowH+2,stroke:css('--grid'),'stroke-width':1}));
       var tx=mk('text',{x:sx(t),y:top+d.length*rowH+18,'text-anchor':'middle','font-size':11,fill:css('--muted')});
-      tx.textContent=t; svg.appendChild(tx);
+      tx.textContent=t+'%'; svg.appendChild(tx);
     });
     d.forEach(function(row,i){
-      var y=top+i*rowH+rowH/2, g=mk('g',{});
-      var a=sx(row.a), b=sx(row.b), up=row.b>=row.a;
-      if(Math.abs(b-a)>1){
-        g.appendChild(mk('line',{x1:a,x2:b,y1:y,y2:y,stroke:up?css('--dot-before'):css('--serious'),
-          'stroke-width':3,'stroke-linecap':'round',opacity:.55}));
-      }
-      g.appendChild(mk('circle',{cx:a,cy:y,r:5.5,fill:css('--dot-before'),stroke:css('--surface'),'stroke-width':2}));
-      g.appendChild(mk('circle',{cx:b,cy:y,r:5.5,fill:css('--dot-after'),stroke:css('--surface'),'stroke-width':2}));
-      var lab=mk('text',{x:x0-12,y:y+4,'text-anchor':'end','font-size':12.5,fill:css('--ink-2')});
+      var y=top+i*rowH+rowH/2, g=mk('g',{}), a=sx(row.a), b=sx(row.b);
+      g.appendChild(mk('line',{x1:a,x2:b,y1:y,y2:y,stroke:css('--dot-before'),'stroke-width':3,'stroke-linecap':'round',opacity:.6}));
+      g.appendChild(mk('circle',{cx:a,cy:y,r:6,fill:css('--dot-before'),stroke:css('--surface'),'stroke-width':2}));
+      g.appendChild(mk('circle',{cx:b,cy:y,r:6,fill:css('--dot-after'),stroke:css('--surface'),'stroke-width':2}));
+      var lab=mk('text',{x:x0-12,y:y-1,'text-anchor':'end','font-size':13,fill:css('--ink'),'font-weight':'600'});
       lab.textContent=row.label; g.appendChild(lab);
-      var dv=row.b-row.a;
-      var val=mk('text',{x:x1+10,y:y+4,'font-size':12.5,'font-variant-numeric':'tabular-nums','font-weight':'620',
-        fill: dv>0?css('--good-text'):(dv<0?css('--critical'):css('--muted'))});
-      val.textContent=(dv>0?'+':'')+dv; g.appendChild(val);
-      bind(g,'<b>'+row.label+'</b><br>frozen '+row.a+' → 内化后 '+row.b+'（'+(dv>0?'+':'')+dv+'）'+(row.note?'<br>'+row.note:''));
+      var sub=mk('text',{x:x0-12,y:y+15,'text-anchor':'end','font-size':11.5,fill:css('--muted')});
+      sub.textContent=row.sub; g.appendChild(sub);
+      var val=mk('text',{x:x1+12,y:y+4,'font-size':13,'font-variant-numeric':'tabular-nums','font-weight':'640',fill:css('--good-text')});
+      val.textContent='+'+(row.b-row.a).toFixed(2)+'pp'; g.appendChild(val);
+      bind(g,'<b>'+row.label+'</b><br>'+row.detail);
       svg.appendChild(g);
     });
+    mount.innerHTML=''; mount.appendChild(svg);
+  }
+
+  function diagram(mount){
+    var W=730,H=200, svg=mk('svg',{viewBox:'0 0 '+W+' '+H, role:'img',
+      'aria-label':'学生不带记忆生成轨迹，同一份权重加一条记忆作为教师在同一轨迹上打分，两者的分布差异作为 reverse KL 目标写入 LoRA'});
+    var ink=css('--ink'), ink2=css('--ink-2'), hair=css('--axis'), acc=css('--accent'), surf=css('--surface');
+    function box(x,y,w,h,title,sub,hi){
+      var g=mk('g',{});
+      g.appendChild(mk('rect',{x:x,y:y,width:w,height:h,rx:9,fill:hi?css('--accent-wash'):surf,
+        stroke:hi?acc:hair,'stroke-width':hi?1.6:1}));
+      var t=mk('text',{x:x+w/2,y:y+(sub?24:h/2+4),'text-anchor':'middle','font-size':13,'font-weight':'640',fill:ink});
+      t.textContent=title; g.appendChild(t);
+      if(sub){ sub.split('\n').forEach(function(line,i){
+        var s=mk('text',{x:x+w/2,y:y+42+i*15,'text-anchor':'middle','font-size':11.5,fill:ink2});
+        s.textContent=line; g.appendChild(s); }); }
+      svg.appendChild(g); return g;
+    }
+    function arrow(x1,y1,x2,y2,label,dash){
+      var g=mk('g',{});
+      g.appendChild(mk('path',{d:'M'+x1+','+y1+'L'+x2+','+y2,stroke:hair,'stroke-width':1.6,
+        'marker-end':'url(#ah)','fill':'none','stroke-dasharray':dash||'none'}));
+      if(label){ var t=mk('text',{x:(x1+x2)/2,y:(y1+y2)/2-8,'text-anchor':'middle','font-size':11,fill:ink2});
+        t.textContent=label; g.appendChild(t); }
+      svg.appendChild(g);
+    }
+    var defs=mk('defs',{}); var m=mk('marker',{id:'ah',viewBox:'0 0 10 10',refX:9,refY:5,
+      markerWidth:6,markerHeight:6,orient:'auto-start-reverse'});
+    m.appendChild(mk('path',{d:'M0,0L10,5L0,10z',fill:hair})); defs.appendChild(m); svg.appendChild(defs);
+
+    box(30,12,190,72,'学生：不带记忆','在真实任务上跑一遍\n这条轨迹就是在线成绩',false);
+    box(30,106,190,72,'教师：同一份权重','多读一条成功轨迹\n在学生的轨迹上打分',false);
+    box(288,58,180,72,'reverse KL','只在动作 token 上\n无需任何 reward',true);
+    box(530,58,190,72,'LoRA（在线合并）','推理时不带记忆\n也保持同样的行为',false);
+
+    arrow(220,48,288,84);
+    arrow(220,142,288,110);
+    arrow(468,94,530,94);
+    var g=mk('g',{});
+    g.appendChild(mk('path',{d:'M625,130 L625,172 L14,172 L14,48 L26,48',stroke:hair,'stroke-width':1.4,
+      fill:'none','stroke-dasharray':'5 4','marker-end':'url(#ah)','stroke-linejoin':'round'}));
+    var t=mk('text',{x:340,y:188,'text-anchor':'middle','font-size':11,fill:ink2});
+    t.textContent='下一批任务由更新后的权重来跑'; g.appendChild(t); svg.appendChild(g);
     mount.innerHTML=''; mount.appendChild(svg);
   }
 
   var iclData=[
-    {label:'success-first rank1（最佳）', v:101, hi:true,  note:'成功过滤 + 自然任务文本相似度，1 条完整轨迹 · vs frozen 39/24, p=0.077'},
-    {label:'lexical rank4',              v:92,  note:'相似度第 4 名单 donor · 35/29, p=0.532'},
-    {label:'lexical rank1',              v:88,  note:'纯相似度 top-1 · p=0.899'},
-    {label:'frozen（无记忆）',            v:86,  note:'基线'},
-    {label:'success top4（原文反思）',     v:69,  note:'4 条成功反思并列 · 显著差于 frozen, p=0.027'},
-    {label:'success top4（压缩 lesson）',  v:68,  note:'4 源 8 条 lesson · p=0.041'},
-    {label:'success top8（压缩 lesson）',  v:61,  note:'8 源 8 条 lesson · p=0.003'}
+    {label:'筛选后注入 1 条完整轨迹', v:101, hi:true, note:'先用环境已知的成败过滤，再按任务相似度取一条'},
+    {label:'不筛选，注入 1 条',        v:88,  note:'只按相似度取一条，没有质量过滤'},
+    {label:'不给记忆',                v:86,  note:'基线'},
+    {label:'并列 4 条经验',           v:69,  note:'四条成功反思一起注入'},
+    {label:'并列 8 条经验',           v:61,  note:'覆盖更多来源，更差'}
   ];
-  var saltData=[
-    {label:'salt0（发现）', a:86, b:101, note:'配对 39/24, p=0.077'},
-    {label:'salt1（确认）', a:89, b:96,  note:'配对 33/26, p=0.435'},
-    {label:'salt2（确认）', a:77, b:96,  note:'配对 37/18, p=0.014'}
-  ];
-  var famData=[
-    {label:'env_183', a:10, b:11}, {label:'env_184', a:9,  b:11},
-    {label:'env_185', a:4,  b:3, note:'唯一回退家族'},  {label:'env_186', a:16, b:16},
-    {label:'env_187', a:0,  b:0, note:'两臂均无成功'},  {label:'env_188', a:8,  b:9},
-    {label:'env_189', a:4,  b:6}, {label:'env_190', a:2,  b:3},
-    {label:'env_191', a:27, b:31}
+  var gainData=[
+    {label:'在线任务流', sub:'400 题，边服务边学', a:4.50, b:6.75, detail:'18 → 27 题（p=0.035，显著）'},
+    {label:'未见家族测试', sub:'450 题，推理不带记忆', a:17.78, b:20.00, detail:'80 → 90 题（方向为正，p=0.13）'}
   ];
 
   function draw(){
     barChart(document.getElementById('chart-icl'),
-      {data:iclData, max:110, ticks:[0,20,40,60,80,100], baseline:86,
-       aria:'512 题固定池上各 ICL 记忆形态的成功数，success-first rank1 最高为 101，多记忆拼接臂低于无记忆基线'});
-    dumbbell(document.getElementById('chart-salt'),
-      {data:saltData, min:70, max:105, ticks:[70,80,90,100], labelW:120,
-       aria:'三个 request seed 盐上 frozen 与 success-first rank1 的成功数对比，三盐方向一致为正'});
-    dumbbell(document.getElementById('chart-family'),
-      {data:famData, min:0, max:34, ticks:[0,10,20,30], labelW:130, rowH:32,
-       aria:'held-out 九个家族及合计的 frozen 与内化后成功数对比，八个家族不降'});
+      {data:iclData, max:110, ticks:[0,20,40,60,80,100], baseline:86, labelW:186,
+       aria:'筛选后注入一条完整轨迹得到 101 题成功，高于不给记忆的 86；并列四条或八条经验分别只有 69 和 61'});
+    dumbbell(document.getElementById('chart-gain'),
+      {data:gainData, min:0, max:24, ticks:[0,5,10,15,20], labelW:150,
+       aria:'在线任务流成功率从 4.5% 升到 6.75%，未见家族测试从 17.78% 升到 20%'});
+    diagram(document.getElementById('diagram'));
   }
   draw();
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change',draw);
