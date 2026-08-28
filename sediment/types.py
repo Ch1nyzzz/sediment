@@ -73,9 +73,14 @@ class HindsightResult:
     spans: list[SpanScore]
     obs_surprise: float  # mean over max(delta, 0) on tool-role tokens
     act_gain: float  # mean delta on assistant-role tokens
+    # Context-distillation teacher (cfg.kl_target), parallel to `spans`: per
+    # token, the top-k {token_id: logprob} of the model READING the block.
+    teacher: Optional[list[list[dict[int, float]]]] = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d.pop("teacher", None)  # megabytes per trajectory; never persisted
+        return d
 
 
 @dataclass
@@ -91,6 +96,10 @@ class TrainSample:
     task_id: str
     messages: list[Message]
     token_weights_by_msg: list[list[float]]  # parallel to messages
+    # Context-distillation teacher (cfg.kl_target): per message, per token, the
+    # top-k {token_id: logprob} of the model reading the evidence block. None
+    # (or an empty per-message list) means plain CE on that message.
+    teacher_by_msg: Optional[list[list[dict[int, float]]]] = None
 
 
 @dataclass
@@ -109,6 +118,8 @@ class GateDecision:
     magnitude: float  # aggregated surprise that proposed this candidate
     behavioral_changed: Optional[float] = None  # frac replayed states w/ changed action
     probe_delta: Optional[float] = None  # probe success delta vs parent
+    probe_rate: Optional[float] = None  # candidate probe success
+    parent_rate: Optional[float] = None  # parent probe success
     reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:

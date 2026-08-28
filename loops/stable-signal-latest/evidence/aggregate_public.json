@@ -1,0 +1,191 @@
+{
+  "format": "sediment-stable-signal-aggregate-public-v1",
+  "arms": [
+    "noop",
+    "single",
+    "heuristic_joint",
+    "mean",
+    "stable",
+    "shuffled"
+  ],
+  "test_labels_used_for_training": false,
+  "single_selected_on_discovery_only": true,
+  "deployment_gate": {
+    "calibration_partition": "train-validation-memory-task-clusters",
+    "positive_calibration_windows": 0,
+    "test_labels_used": false,
+    "uncertainty_quantile": 0.75,
+    "uncertainty_threshold": 0.0,
+    "write_threshold": 0.5
+  },
+  "aggregate": {
+    "arm_mean_gains": {
+      "heuristic_joint": 0.0005567708333333275,
+      "mean": 0.029614062499999996,
+      "noop": 0.0,
+      "shuffled": 0.014028125,
+      "single": 0.024125694444444443,
+      "stable": 0.01015642361111111
+    },
+    "comparisons": {
+      "shuffled_minus_noop": {
+        "equal_memory_clusters": 1,
+        "exact_one_sided_sign_flip_p": 0.25,
+        "mean": 0.014028125,
+        "median": 0.006390625000000004,
+        "memory_cluster_bootstrap_95": [
+          -0.004550000000000001,
+          0.0393234375
+        ],
+        "negative_memory_clusters": 1,
+        "per_memory_cluster": [
+          0.0,
+          0.012781250000000008,
+          0.05243125,
+          -0.009100000000000002
+        ],
+        "positive_memory_clusters": 2
+      },
+      "stable_minus_heuristic_joint": {
+        "equal_memory_clusters": 0,
+        "exact_one_sided_sign_flip_p": 0.4375,
+        "mean": 0.009599652777777776,
+        "median": 0.0077197916666666595,
+        "memory_cluster_bootstrap_95": [
+          -0.063721875,
+          0.08292118055555556
+        ],
+        "negative_memory_clusters": 2,
+        "per_memory_cluster": [
+          -0.05000000000000001,
+          -0.07744374999999998,
+          0.06543958333333333,
+          0.10040277777777777
+        ],
+        "positive_memory_clusters": 2
+      },
+      "stable_minus_mean": {
+        "equal_memory_clusters": 0,
+        "exact_one_sided_sign_flip_p": 1.0,
+        "mean": -0.019457638888888892,
+        "median": -0.03272465277777777,
+        "memory_cluster_bootstrap_95": [
+          -0.07772847222222223,
+          0.05208020833333333
+        ],
+        "negative_memory_clusters": 3,
+        "per_memory_cluster": [
+          -0.10000000000000002,
+          -0.05453541666666666,
+          0.08761875,
+          -0.010913888888888888
+        ],
+        "positive_memory_clusters": 1
+      },
+      "stable_minus_noop": {
+        "equal_memory_clusters": 1,
+        "exact_one_sided_sign_flip_p": 0.5,
+        "mean": 0.01015642361111111,
+        "median": -0.0005364583333333324,
+        "memory_cluster_bootstrap_95": [
+          -0.0032291666666666675,
+          0.034234895833333334
+        ],
+        "negative_memory_clusters": 2,
+        "per_memory_cluster": [
+          0.0,
+          -0.0010729166666666647,
+          0.046004166666666665,
+          -0.004305555555555556
+        ],
+        "positive_memory_clusters": 1
+      },
+      "stable_minus_shuffled": {
+        "equal_memory_clusters": 1,
+        "exact_one_sided_sign_flip_p": 1.0,
+        "mean": -0.0038717013888888907,
+        "median": -0.0032135416666666666,
+        "memory_cluster_bootstrap_95": [
+          -0.010390625000000004,
+          0.002397222222222223
+        ],
+        "negative_memory_clusters": 2,
+        "per_memory_cluster": [
+          0.0,
+          -0.013854166666666673,
+          -0.006427083333333333,
+          0.004794444444444446
+        ],
+        "positive_memory_clusters": 1
+      },
+      "stable_minus_single": {
+        "equal_memory_clusters": 0,
+        "exact_one_sided_sign_flip_p": 1.0,
+        "mean": -0.013969270833333328,
+        "median": 0.00964166666666667,
+        "memory_cluster_bootstrap_95": [
+          -0.089425,
+          0.03787552083333334
+        ],
+        "negative_memory_clusters": 1,
+        "per_memory_cluster": [
+          -0.123825,
+          0.005508333333333344,
+          0.04866458333333334,
+          0.013774999999999996
+        ],
+        "positive_memory_clusters": 3
+      }
+    },
+    "efficacy_claim_gate": {
+      "catastrophe_floor": -0.2,
+      "passed": false,
+      "requirements": {
+        "shuffled_has_no_positive_aggregate_advantage_over_noop": false,
+        "stable_beats_noop_and_three_donor_baselines": false,
+        "stable_beats_shuffled": false,
+        "stable_gain_positive_after_omitting_each_family": true,
+        "stable_worst_family_above_catastrophe_floor": true
+      }
+    },
+    "sampling_precision_diagnostics": {
+      "all_passed": false,
+      "interpretation": "Descriptive only: failure does not negate a directional pilot, and a null shuffled effect is not established by non-significance alone.",
+      "requirements": {
+        "primary_bootstrap_lower_bounds_positive": false,
+        "primary_one_sided_p_values_below_0_05": false,
+        "shuffled_noop_interval_contains_zero": true
+      }
+    },
+    "source_memory_cluster_sizes": {
+      "memory-96a38cf8a606d3c9": 1,
+      "memory-9e9122bf1b5d63fc": 4,
+      "memory-b89a9f56077a2454": 4,
+      "memory-bc916b3af5972586": 3
+    },
+    "source_memory_task_clusters": 4,
+    "stable_family_mean_gains": {
+      "env_150": 0.0,
+      "env_160": 0.011238194444444443,
+      "env_161": 0.005949999999999998,
+      "env_164": 0.0234375
+    },
+    "stable_leave_one_family_out_mean_gains": {
+      "env_150": 0.013541898148148148,
+      "env_160": 0.009795833333333335,
+      "env_161": 0.011558564814814815,
+      "env_164": 0.005729398148148148
+    },
+    "stable_worst_family_gain": 0.0,
+    "stable_write_rate": 0.0,
+    "window_weighted_arm_mean_gains": {
+      "heuristic_joint": -0.0030319444444444478,
+      "mean": 0.013934722222222222,
+      "noop": 0.0,
+      "shuffled": 0.0194625,
+      "single": 0.0027180555555555513,
+      "stable": 0.013900694444444445
+    },
+    "windows": 12
+  }
+}

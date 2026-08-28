@@ -1,0 +1,76 @@
+{
+  "artifact_boundary": {
+    "checkpoint_included": false,
+    "jsonl_included": false,
+    "raw_trajectories_included": false,
+    "synthesized_adapters_included": false,
+    "task_level_pairs_included": false,
+    "worker_logs_included": false
+  },
+  "blinding": {
+    "basis_fitted_on_partition": "train",
+    "basis_fit_used_validation_inputs": false,
+    "outer_test_labels_loaded_for_training": false,
+    "test_labels_used_for_deployment_gate": false,
+    "test_windows_unread_at_checkpoint": 12
+  },
+  "completed_at": "2026-08-28T01:50:48Z",
+  "evidence_sha256": {
+    "aggregate_public.json": "7f688e149ad5ee7260ad3d5aca39f11abb9c9a3b57aa1bbd4e882d2efaac4da8",
+    "family_partition_frozen.json": "cd14a76e2f52cf73baff1e354affdf61a3bcc11ed6516d75f15809156c7c6f83",
+    "numerical_rank_amendment.json": "0c6da559584f9e12e907fb3a2dec8ac9f84246d6116ce06c22129d309f4f7a10",
+    "proposal_audit_complete.json": "5830814af35c2ec2d386214aada4d1fd6f4f554d278267d6ae396f96c06b613b",
+    "stable_signal.report.json": "eba746e2602f96d65e49d05ec1bdb7ece7ec5f62efbd45820804187dda133ad5",
+    "stable_signal_protocol_frozen.json": "1e722061b601f634b6ff0af6ea5486492a64fc5ce49bb145ff51ea5657c812ee",
+    "stable_test.report.json": "3b9e860e233f12cdedb5f8c97fd926066898eec95a7870d544e6bf45bb956aba",
+    "stable_train.report.json": "a1469b19a277028d97dbd3a912e9ce94a7179b8e35ca66f0085cde6684fe43c7"
+  },
+  "evaluation": {
+    "arms": 6,
+    "efficacy_claim_gate_passed": false,
+    "outer_source_memory_task_clusters": 4,
+    "outer_test_windows": 12,
+    "sampling_precision_diagnostics_passed": false,
+    "stable_write_rate": 0.0
+  },
+  "format": "sediment-stable-signal-integrity-v1",
+  "no_op_identity_audit": {
+    "all_synthesized_tensor_values_equal_reference": true,
+    "coefficient_max_abs": 0.0,
+    "gate_passed_false": 24,
+    "max_abs_tensor_delta": 0.0,
+    "synthesized_adapters": 24,
+    "unique_synthesized_adapter_file_hashes": 1
+  },
+  "numerical_rank_amendment": {
+    "amended_before_checkpoint_or_test_projection": true,
+    "basis_py_new_sha256": "f0ec602839cbb2c6d431a17b0378cfd02d70e2f4c563d27c6d296916114eb6ad",
+    "basis_py_old_sha256": "6a00cd626890f949a4eba54cdcf5ab1f87f7e256fc3712650537ab2dd2feac8f",
+    "original_frozen_dependency_list_included_basis_py": false
+  },
+  "proposal_audit": {
+    "all_passed": true,
+    "failed": 0,
+    "missing": 0,
+    "test_windows": 12,
+    "train_windows": 10,
+    "windows": 22
+  },
+  "remote_working_root": "/data/erv1n/sediment/results/stable_signal_v2_20260827",
+  "service_boundary_after_completion": {
+    "gpu_4_7_memory_used_mib_each": 34939,
+    "resident_endpoints_healthy": [
+      8104,
+      8105,
+      8106,
+      8107
+    ],
+    "temporary_8b_services_left_running": false,
+    "unrelated_gpu_0_3_workloads_touched": false
+  },
+  "tests": {
+    "local_full": "209 passed, 3 warnings",
+    "local_targeted_after_amendment": "14 passed",
+    "remote_targeted_after_amendment": "14 passed"
+  }
+}

@@ -131,6 +131,45 @@ def test_vllm_generate_model_routing():
     assert payload["temperature"] == 0.2 and payload["max_tokens"] == 16
 
 
+def test_vllm_common_seed_ignores_retrieved_block_but_tracks_bare_state():
+    client, calls = make_client()
+    client.generation_seed_mode = "bare_prompt_hash"
+    bare = [Message("system", "sys"), Message("user", "solve query")]
+    with_memory = [
+        Message("system", "sys"),
+        Message("user", "<previous_attempts>donor A</previous_attempts>\n\nsolve query"),
+    ]
+    other_memory = [
+        Message("system", "sys"),
+        Message("user", "<previous_attempts>donor B</previous_attempts>\n\nsolve query"),
+    ]
+    for messages in (bare, with_memory, other_memory):
+        client.generate(messages, temperature=0.7, max_tokens=16)
+    assert calls[-3][1]["seed"] == calls[-2][1]["seed"] == calls[-1][1]["seed"]
+    client.generate(bare + [Message("assistant", "next state")], max_tokens=16)
+    assert calls[-1][1]["seed"] != calls[-2][1]["seed"]
+
+
+def test_vllm_common_seed_salt_creates_reproducible_replicates():
+    messages = [Message("user", "solve query")]
+    first, first_calls = make_client()
+    first.generation_seed_mode = "bare_prompt_hash"
+    first.generation_seed_salt = 1
+    second, second_calls = make_client()
+    second.generation_seed_mode = "bare_prompt_hash"
+    second.generation_seed_salt = 2
+    first.generate(messages)
+    first.generate(messages)
+    second.generate(messages)
+    assert first_calls[-1][1]["seed"] == first_calls[-2][1]["seed"]
+    assert first_calls[-1][1]["seed"] != second_calls[-1][1]["seed"]
+
+
+def test_vllm_rejects_unknown_generation_seed_mode():
+    with pytest.raises(ValueError, match="generation seed mode"):
+        VllmClient("http://localhost:8000/", "qwen-base", generation_seed_mode="bad")
+
+
 def test_vllm_score_per_message_slices():
     client, _ = make_client()
     msgs = convo()[:3]
@@ -142,16 +181,51 @@ def test_vllm_score_per_message_slices():
     ]
 
 
+class FakeTok:
+    """Chat template that agrees with the faked server: TOKENS_PER_MSG each."""
+
+    def apply_chat_template(self, msgs, tokenize=True, return_dict=False):
+        return list(range(len(msgs) * TOKENS_PER_MSG))
+
+
 def test_vllm_score_request_shape():
+    """No local tokenizer -> one request for the whole rendering, then the
+    per-prefix fallback (the alignment could not be verified)."""
     client, calls = make_client()
     client.score([Message("user", "a"), Message("assistant", "b")])
-    assert len(calls) == 2  # one request per message prefix
-    for i, (path, payload) in enumerate(calls, 1):
+    assert len(calls) == 1 + 2
+    assert len(calls[0][1]["messages"]) == 2  # fast path tried first
+    for path, payload in calls:
         assert path == "/v1/chat/completions"
-        assert len(payload["messages"]) == i
         assert payload["prompt_logprobs"] == 0
         assert payload["add_generation_prompt"] is False
         assert payload["temperature"] == 0.0
+
+
+def test_vllm_score_single_request_when_aligned():
+    client, calls = make_client()
+    client._tok = FakeTok()
+    msgs = convo()[:3]
+    assert client.score(msgs) == [
+        [0.0, -1.0, -1.0], [-2.0, -2.0, -2.0], [-3.0, -3.0, -3.0]]
+    assert len(calls) == 1  # the whole trajectory in one call
+
+
+def test_vllm_score_topk():
+    client, calls = make_client()
+    client._tok = FakeTok()
+    ids, dists = client.score_topk(convo()[:2], k=4)
+    assert [len(x) for x in ids] == [TOKENS_PER_MSG, TOKENS_PER_MSG]
+    assert ids[1] == [3, 4, 5]  # local token ids, per message
+    assert calls[0][1]["prompt_logprobs"] == 4
+    assert dists[0][0] == {}  # position 0 carries no logprob
+    assert dists[1][0] == {7: -2.0}
+
+
+def test_vllm_score_topk_refuses_misaligned():
+    client, _ = make_client()  # no local tokenizer -> cannot verify
+    with pytest.raises(RuntimeError, match="cannot align top-k teacher"):
+        client.score_topk(convo()[:2], k=4)
 
 
 def test_vllm_load_adapter():
@@ -248,3 +322,15 @@ def test_post_retries_5xx_but_not_4xx(monkeypatch):
     import pytest
     with pytest.raises(RuntimeError):
         client._post("/v1/x", {})
+
+
+def test_vllm_external_adapter_keeps_its_exact_name():
+    """Explicitly external adapters do not take a run-scoped prefix."""
+    client, calls = make_client()
+    client.lora_prefix = "run-a-"
+    client.load_external("shared_adapter", "/data/adapters/shared_adapter")
+    assert calls == [("/v1/load_lora_adapter",
+                      {"lora_name": "shared_adapter",
+                       "lora_path": "/data/adapters/shared_adapter"})]
+    assert client._model_name("shared_adapter") == "shared_adapter"
+    assert client._model_name("v0003") == "run-a-v0003"

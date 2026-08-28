@@ -151,6 +151,39 @@ def test_build_block_own_outcome_summary_only():
     assert build_block([], None, cfg).text == ""
 
 
+def test_build_block_keeps_all_peer_tasks_and_reflections_before_steps():
+    peers = []
+    for i in range(4):
+        peer = make_traj(task_id=f"p{i}", reward=0.0, success=False)
+        peer.messages[1] = Message("user", f"FULL TASK {i} " + "q" * 80)
+        peer.meta["reflection"] = f"FULL REFLECTION {i} " + "r" * 80
+        peers.append(peer)
+    block = build_block(peers, None, StreamConfig(max_block_chars=900, max_result_chars=20))
+
+    assert block.source_task_ids == ["p0", "p1", "p2", "p3"]
+    for i in range(4):
+        assert f"FULL TASK {i} " + "q" * 80 in block.text
+        assert f"FULL REFLECTION {i} " + "r" * 80 in block.text
+    last_reflection = block.text.index("FULL REFLECTION 3")
+    first_step = block.text.find("selected steps:")
+    assert first_step == -1 or last_reflection < first_step
+
+
+def test_legacy_block_reproduces_first_peer_over_budget_truncation_route():
+    peers = [make_traj(task_id=f"p{i}") for i in range(4)]
+    for i, peer in enumerate(peers):
+        peer.meta["reflection"] = f"reflection-{i}-" + "r" * 300
+    cfg = StreamConfig(
+        experience_view="legacy", max_block_chars=350, max_result_chars=100,
+    )
+    block = build_block(peers, None, cfg)
+    assert block.source_task_ids == ["p0"]
+    assert "cancel order 7" not in block.text  # legacy block omitted source task text
+    assert "reflection-0" in block.text
+    assert "reflection-1" not in block.text
+    assert len(block.text) > cfg.max_block_chars  # first peer was indivisible
+
+
 # ------------------------------------------------------------- hindsight
 
 

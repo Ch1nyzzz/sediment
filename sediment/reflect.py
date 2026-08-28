@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from sediment.config import StreamConfig
 from sediment.experience import _final_feedback, _outcome, _steps, _tail, _truncate
+from sediment.transfer import canonical_transfer_reflection
 from sediment.types import Message, Trajectory
 
 PROMPT = (
@@ -19,7 +20,6 @@ PROMPT = (
     "causes), what went wrong, and what to do instead. Be concrete and specific to "
     "this environment. Output only the bullets."
 )
-
 
 def render_attempt(traj: Trajectory, cfg: StreamConfig) -> str:
     ok, r = _outcome(traj)
@@ -37,6 +37,13 @@ def render_attempt(traj: Trajectory, cfg: StreamConfig) -> str:
 def reflect(engine, traj: Trajectory, cfg: StreamConfig, *, adapter: str) -> str:
     """Return the reflection text (bounded to cfg.max_reflection_chars); '' on error."""
     task_text = next((m.content for m in traj.messages if m.role == "user"), "")
+    if cfg.reflection_mode not in ("local", "transfer"):
+        raise ValueError(f"unknown reflection mode: {cfg.reflection_mode!r}")
+    if cfg.reflection_mode == "transfer":
+        return _truncate(
+            canonical_transfer_reflection(task_text, render_attempt(traj, cfg)),
+            cfg.max_reflection_chars,
+        )
     messages = [
         Message("system", PROMPT),
         Message("user", f"Task:\n{_truncate(task_text, 1500)}\n\nYour attempt:\n"

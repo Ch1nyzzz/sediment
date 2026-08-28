@@ -101,5 +101,19 @@ class MockEngine:
             for m in messages
         ]
 
+    def score_topk(self, messages: list[Message], *, adapter: str = "base", k: int = 32):
+        """(token_ids, per-token top-k {id: logprob}) -- mock context-distillation
+        teacher. Token ids are the whitespace tokens' hashes; the scored token
+        always carries its `score` logprob, the k-1 alternatives sit 1 nat below
+        so the teacher is peaked but not degenerate."""
+        ids, dists = [], []
+        for row, m in zip(self.score(messages, adapter=adapter), messages):
+            toks = mock_tokenize(m.content)
+            row_ids = [hash(t) % 100_000 for t in toks]
+            ids.append(row_ids)
+            dists.append([{tid: lp, **{(tid + 1 + j) % 100_000: lp - 1.0 for j in range(k - 1)}}
+                          for tid, lp in zip(row_ids, row)])
+        return ids, dists
+
     def load_adapter(self, version: AdapterVersion) -> None:
         self.adapters[version.name] = version

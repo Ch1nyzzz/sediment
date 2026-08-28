@@ -36,10 +36,10 @@ def test_stub_writes_adapter_meta(tmp_path):
     assert meta["parent"] == "v0000"
     # t1 flat weights: [0, 0, 0, 0.5, 1.5, 0, 2.0, 0] -> mean 0.5, max 2.0, 3 nonzero
     assert meta["samples"][0] == {"task_id": "t1", "mean": 0.5, "max": 2.0, "nonzero": 3,
-                                  "mass_act": 2.0, "mass_obs": 2.0}
+                                  "mass_act": 2.0, "mass_obs": 2.0, "n_pos": 3, "n_neg": 0}
     # t2 flat weights: [0, 0, 1.0, 3.0, 0] -> mean 0.8, max 3.0, 2 nonzero
     assert meta["samples"][1] == {"task_id": "t2", "mean": 0.8, "max": 3.0, "nonzero": 2,
-                                  "mass_act": 4.0, "mass_obs": 0.0}
+                                  "mass_act": 4.0, "mass_obs": 0.0, "n_pos": 2, "n_neg": 0}
     assert cand.train_stats["n_samples"] == 2
 
 

@@ -1,0 +1,205 @@
+{
+  "candidate_rewards_inspected": false,
+  "digest": "4d392eea09a3c140cfb2ca11356b62f6acc98c0588e8b73aa445ec5911fe19ce",
+  "family_stats": {
+    "env_141": {
+      "completed": 200,
+      "successful": 22
+    },
+    "env_142": {
+      "completed": 200,
+      "successful": 0
+    },
+    "env_143": {
+      "completed": 200,
+      "successful": 12
+    },
+    "env_144": {
+      "completed": 200,
+      "successful": 12
+    },
+    "env_145": {
+      "completed": 200,
+      "successful": 6
+    },
+    "env_146": {
+      "completed": 200,
+      "successful": 2
+    },
+    "env_147": {
+      "completed": 200,
+      "successful": 4
+    },
+    "env_148": {
+      "completed": 200,
+      "successful": 12
+    },
+    "env_149": {
+      "completed": 200,
+      "successful": 38
+    },
+    "env_150": {
+      "completed": 200,
+      "successful": 0
+    },
+    "env_151": {
+      "completed": 200,
+      "successful": 94
+    },
+    "env_152": {
+      "completed": 200,
+      "successful": 15
+    },
+    "env_153": {
+      "completed": 200,
+      "successful": 34
+    },
+    "env_154": {
+      "completed": 200,
+      "successful": 37
+    },
+    "env_155": {
+      "completed": 200,
+      "successful": 45
+    },
+    "env_156": {
+      "completed": 200,
+      "successful": 4
+    },
+    "env_157": {
+      "completed": 200,
+      "successful": 18
+    },
+    "env_158": {
+      "completed": 200,
+      "successful": 33
+    },
+    "env_159": {
+      "completed": 200,
+      "successful": 0
+    },
+    "env_160": {
+      "completed": 200,
+      "successful": 16
+    },
+    "env_161": {
+      "completed": 200,
+      "successful": 4
+    },
+    "env_162": {
+      "completed": 200,
+      "successful": 36
+    },
+    "env_163": {
+      "completed": 200,
+      "successful": 8
+    },
+    "env_164": {
+      "completed": 200,
+      "successful": 73
+    },
+    "env_165": {
+      "completed": 200,
+      "successful": 22
+    },
+    "env_166": {
+      "completed": 200,
+      "successful": 42
+    },
+    "env_167": {
+      "completed": 200,
+      "successful": 17
+    },
+    "env_168": {
+      "completed": 200,
+      "successful": 6
+    },
+    "env_169": {
+      "completed": 200,
+      "successful": 0
+    },
+    "env_170": {
+      "completed": 200,
+      "successful": 32
+    },
+    "env_171": {
+      "completed": 200,
+      "successful": 39
+    },
+    "env_172": {
+      "completed": 200,
+      "successful": 37
+    },
+    "env_173": {
+      "completed": 200,
+      "successful": 8
+    },
+    "env_174": {
+      "completed": 200,
+      "successful": 41
+    }
+  },
+  "format": "sediment-stable-family-partition-v1",
+  "role_counts": [
+    12,
+    4,
+    4,
+    6,
+    4,
+    4
+  ],
+  "seed": 20260827,
+  "source_buffers": [
+    "/data/erv1n/sediment/results/meta_frozen_s0/buffer.jsonl",
+    "/data/erv1n/sediment/results/meta_frozen_s1/buffer.jsonl",
+    "/data/erv1n/sediment/results/meta_frozen_s2/buffer.jsonl",
+    "/data/erv1n/sediment/results/meta_frozen_s3/buffer.jsonl"
+  ],
+  "stratification": "completed_success_count_greedy_balance_v1",
+  "test_confirmation": [
+    "env_150",
+    "env_164",
+    "env_161",
+    "env_160"
+  ],
+  "test_discovery": [
+    "env_152",
+    "env_162",
+    "env_146",
+    "env_171"
+  ],
+  "test_members": [
+    "env_147",
+    "env_157",
+    "env_174",
+    "env_154",
+    "env_141",
+    "env_143"
+  ],
+  "train_confirmation": [
+    "env_142",
+    "env_159",
+    "env_151",
+    "env_169"
+  ],
+  "train_discovery": [
+    "env_166",
+    "env_156",
+    "env_158",
+    "env_144"
+  ],
+  "train_members": [
+    "env_153",
+    "env_163",
+    "env_155",
+    "env_170",
+    "env_173",
+    "env_168",
+    "env_149",
+    "env_148",
+    "env_167",
+    "env_165",
+    "env_145",
+    "env_172"
+  ]
+}

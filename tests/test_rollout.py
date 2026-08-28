@@ -182,3 +182,14 @@ def test_envscaler_adapter_missing_dir_raises(tmp_path):
     assert not lopd_available(tmp_path)
     with pytest.raises(RuntimeError):
         EnvScalerAdapter(third_party_dir=tmp_path)
+
+
+def test_strip_experience_inverts_inject():
+    from sediment.rollout.agent_loop import inject_experience, strip_experience
+    from sediment.types import ExperienceBlock, Message
+    block = ExperienceBlock(text="<previous_attempts>\nAttempt 1 — FAILED\n</previous_attempts>")
+    msgs = [Message("system", "s"), Message("user", inject_experience("do the task", block)),
+            Message("assistant", "act"), Message("tool", "ok")]
+    bare = strip_experience(msgs)
+    assert [m.content for m in bare] == ["s", "do the task", "act", "ok"]
+    assert strip_experience(bare) == bare  # idempotent / no-op without a block

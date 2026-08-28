@@ -73,8 +73,9 @@ class StubToyOrderEnv:
 def stub_run_episode(engine, env, task, cfg, *, adapter: str,
                      experience: Optional[ExperienceBlock] = None) -> Trajectory:
     messages = env.reset(task)
-    if experience is not None:  # block injected into first user message
-        messages[-1] = Message("user", f"{experience.text}\n\n{messages[-1].content}")
+    if experience is not None:  # block injected into first user message (real tag format)
+        messages[-1] = Message("user", f"<previous_attempts>\n{experience.text}\n</previous_attempts>"
+                                       f"\n\n{messages[-1].content}")
     out = engine.generate(messages, adapter=adapter,
                           temperature=cfg.temperature, max_tokens=cfg.max_tokens)
     messages = messages + [Message("assistant", out)]
@@ -86,7 +87,8 @@ def stub_run_episode(engine, env, task, cfg, *, adapter: str,
 
 
 def stub_build_block(retrieved: list[Trajectory], own: Optional[Trajectory],
-                     cfg: StreamConfig) -> ExperienceBlock:
+                     cfg: StreamConfig, **kwargs) -> ExperienceBlock:
+    del kwargs
     return ExperienceBlock(text=f"block:{own.task_id if own else 'none'}",
                            source_task_ids=[t.task_id for t in retrieved],
                            includes_own_outcome=own is not None)
@@ -116,7 +118,10 @@ class StubBuffer:
     def add(self, traj: Trajectory) -> None:
         self.items.append(traj)
 
-    def retrieve(self, task: dict[str, Any], k: int) -> list[Trajectory]:
+    def retrieve(self, task: dict[str, Any], k: int, *, scope: str = "all",
+                 score_mode: str = "task", offset: int = 0,
+                 diversity: str = "task") -> list[Trajectory]:
+        del score_mode, offset, diversity
         return []
 
     def replay_states(self, n: int, seed: int) -> list[list[Message]]:
@@ -147,18 +152,25 @@ class StubRegistry:
         return self._versions[0]
 
     def current(self) -> AdapterVersion:
-        return self._versions[-1]
+        cur = getattr(self, "_cur", None)
+        return next(v for v in self._versions if v.name == cur) if cur else self._versions[-1]
 
     def publish(self, candidate: UpdateCandidate, parent: AdapterVersion,
                 provenance: list[str]) -> AdapterVersion:
         v = AdapterVersion(f"v{len(self._versions):04d}", candidate.adapter_path,
                            parent.name, list(provenance))
         self._versions.append(v)
+        self._cur = None
         self.publishes += 1
         return v
 
     def history(self) -> list[AdapterVersion]:
         return list(self._versions)
+
+    def _set_current(self, name: str) -> None:
+        self._versions.append(next(v for v in self._versions if v.name == name))
+        self._versions[-1:] = []  # history unchanged; current = named version
+        self._cur = name
 
 
 def stub_trainer(samples: list[TrainSample], parent: AdapterVersion,
@@ -335,7 +347,51 @@ def test_serve_experience_injects_block_into_first_attempt(stub_modules, tmp_pat
     assert registry.publishes == 0
     firsts = [t for t in buffer.items if not t.is_retry]
     assert len(firsts) == 8
-    for t in firsts:  # block built with own=None, rendered ahead of the task text
+    for t in firsts:  # served block is stripped again before buffer/hindsight (student view)
         user = next(m for m in t.messages if m.role == "user")
-        assert user.content.startswith("block:none\n\n")
+        assert not user.content.startswith("block:none") and user.content.startswith("t")
     assert all(r.meta["served_experience"] == [] for r in records)
+
+
+def test_binary_mode_proposes_by_gate_count_not_surprise(stub_modules, tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.weight_mode = "binary"
+    cfg.min_gate_tokens = 0     # stub samples carry zero gated tokens -> only 0 passes
+    cfg.gate_min_surprise = 999  # G1 would reject everything; binary path must ignore it
+    cfg.retry_on_fail = False
+    buffer, gate, registry = StubBuffer(), StubGate(cfg), StubRegistry()
+    records = run_stream(make_tasks(4), [ScriptedMockEngine()], buffer, gate,
+                         stub_trainer, registry, cfg)
+    assert all(r.meta["proposed"] for r in records) and all(r.meta["n_gate"] == 0 for r in records)
+    assert registry.publishes == 1
+
+
+def test_rollback_republishes_previous_version_when_probe_regressed(stub_modules, tmp_path, monkeypatch):
+    """Window 0 merge regresses the probe -> window 1 re-probes v0000; it wins ->
+    v0000's weights are republished and window 1's candidate is discarded."""
+    from sediment.types import GateDecision
+    cfg = make_cfg(tmp_path)
+    cfg.retry_on_fail = False
+    cfg.rollback_thr = 0.05
+    cfg.gate_min_probe_delta = -999
+    cfg.weight_mode, cfg.min_gate_tokens = "binary", 0  # every task proposes
+    rates = {"v0000": 0.9, "cand-v0000": 0.5, "v0001": 0.5, "cand-v0001": 0.4}
+    probed = []
+
+    def run_probe(name, ptasks):
+        probed.append(name)
+        return rates.get(name, 0.0)
+
+    def validate(self, candidate, parent, engine, replay_states, probe_tasks, run_probe=None):
+        c, p = run_probe(candidate.candidate_id, probe_tasks), run_probe(parent.name, probe_tasks)
+        return GateDecision(candidate_id=candidate.candidate_id, passed=True, magnitude=1.0,
+                            probe_delta=c - p, probe_rate=c, parent_rate=p, reason="stub")
+    monkeypatch.setattr(StubGate, "validate", validate)
+    buffer, gate, registry = StubBuffer(), StubGate(cfg), StubRegistry()
+    run_stream(make_tasks(8), [ScriptedMockEngine()], buffer, gate, stub_trainer, registry, cfg,
+               run_probe=run_probe, probe_tasks=[{"task_id": "p0"}])
+    # window 0: v0001 published (probe 0.9 -> 0.5 flags a re-check); window 1:
+    # v0000 re-probed, wins -> current rolled back to base, candidate discarded
+    assert [v.name for v in registry.history()] == ["v0000", "v0001"]
+    assert registry.current().name == "v0000"
+    assert "v0000" in probed[2:]  # re-probed at window 1

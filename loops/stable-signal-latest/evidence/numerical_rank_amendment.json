@@ -1,0 +1,41 @@
+{
+  "amended_at": "2026-08-28T00:38:26Z",
+  "candidate_rewards_inspected": false,
+  "correction": {
+    "description": "Scale the SVD numerical-rank tolerance by the number of observable singular values rather than the parameter width.",
+    "new_basis_py_sha256": "f0ec602839cbb2c6d431a17b0378cfd02d70e2f4c563d27c6d296916114eb6ad",
+    "old_basis_py_sha256": "6a00cd626890f949a4eba54cdcf5ab1f87f7e256fc3712650537ab2dd2feac8f",
+    "regression_test": "test_basis_nonzero_extremely_wide_state_is_not_misclassified_as_zero",
+    "regression_test_sha256": "fad31b781e328302144eb3d441799729dd23ad90cca8fe078f4ec1c8de4540bd",
+    "targeted_tests": "14 passed"
+  },
+  "dependency_closure_erratum": {
+    "basis_py_present_in_frozen_code_sha256": false,
+    "frozen_protocol_sha256_unchanged": "1e722061b601f634b6ff0af6ea5486492a64fc5ce49bb145ff51ea5657c812ee"
+  },
+  "evidence": {
+    "changed_tensors_per_single_proposal": 360,
+    "example_delta_norm": 0.784459416039748,
+    "float32_epsilon_times_parameter_width": 1.6171875,
+    "parameter_width": 13565952
+  },
+  "failed_stage": "train-only basis fitting before checkpoint creation or outer-test projection",
+  "failure": "ValueError: all oracle updates are numerically zero",
+  "format": "sediment-stable-signal-protocol-amendment-v1",
+  "outer_test_labels_loaded": false,
+  "root_cause": "The old tolerance eps * max(matrix.shape) * s_max equaled 1.6171875 * s_max for the 13,565,952-wide LoRA update matrix, so even s_max could not pass the strict threshold although audited updates were non-zero.",
+  "scientific_scope_unchanged": [
+    "family partition",
+    "window plan",
+    "proposal dose",
+    "reward labels",
+    "stable model architecture",
+    "six evaluation arms",
+    "deployment and efficacy gates"
+  ],
+  "windows_audited": {
+    "all_passed": true,
+    "test": 12,
+    "train": 10
+  }
+}

@@ -2,21 +2,27 @@
 
 Generation uses /v1/chat/completions with `model=<adapter name or base>`.
 Teacher-forced scoring uses vLLM's `prompt_logprobs` extra body with
-`add_generation_prompt=False`: one request per message prefix gives the
-prefix token count and its logprobs (the chat-template prefix property, same
-approach as resid's vllm_engine), so per-message logprob lists are the tail
-slices between consecutive prefix lengths. --enable-prefix-caching makes the
-repeated prefixes cheap. LoRA adapters are registered at runtime via
-POST /v1/load_lora_adapter (server must allow runtime LoRA updating).
+`add_generation_prompt=False`. Message boundaries come from the LOCAL chat
+template (free, no HTTP) and are verified against the server's own token
+count, so the whole trajectory is scored in ONE request; on any mismatch we
+fall back to the historical one-request-per-message-prefix loop (the
+chat-template prefix property, same approach as resid's vllm_engine). The
+loop was the dominant streaming cost (60 s mean per trajectory vs 23 s to
+generate it). `score_topk` additionally returns the per-position top-k
+distribution, the teacher target of context distillation (cfg.kl_target).
+LoRA adapters are registered at runtime via POST /v1/load_lora_adapter
+(server must allow runtime LoRA updating).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import socket
 import time
 import re
 import urllib.error
 import urllib.request
+from typing import Optional
 
 from sediment.chat_template import template_kwargs
 from sediment.types import AdapterVersion, Message
@@ -40,12 +46,34 @@ _CTX_OVERFLOW_RE = re.compile(r"contains at least (\d+) input tokens")
 # rate means switching to a generation prompt that carries the empty block.
 _THINK_RE = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL)
 _THINK_OPEN = re.compile(r"^\s*<think>", re.DOTALL)
+# vLLM caps prompt_logprobs at --max-logprobs (default 20); rather than kill a
+# 12-hour stream at the first window, clamp once to whatever it reports.
+_MAX_LOGPROBS_RE = re.compile(r"greater than max allowed: (\d+)")
+
+
+def _without_experience(messages: list[Message]) -> list[dict[str, str]]:
+    """Canonical prompt view shared by memory/no-memory paired generations:
+    no retrieved block, no call-time hints, no working state (harness.bare_view)."""
+    from sediment.harness import bare_view
+
+    return [m.to_dict() for m in bare_view(messages)]
+
+
+def _bare_prompt_seed(messages: list[Message], salt: int = 0) -> int:
+    payload = json.dumps(
+        _without_experience(messages), ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if salt:
+        payload += b"\x00salt=" + str(salt).encode("ascii")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") % (2**31)
 
 
 class VllmClient:
     def __init__(
         self, base_url: str, model: str, *, timeout: float = 600.0, max_context: int = 12288,
-        lora_prefix: str = "",
+        lora_prefix: str = "", generation_seed_mode: str = "none",
+        generation_seed_salt: int = 0,
     ):
         self.base_url = base_url.rstrip("/")
         if self.base_url.endswith("/v1"):  # paths below carry /v1 already
@@ -53,6 +81,10 @@ class VllmClient:
         self.model = model
         self.timeout = timeout
         self.max_context = max_context
+        if generation_seed_mode not in ("none", "bare_prompt_hash"):
+            raise ValueError(f"unknown generation seed mode: {generation_seed_mode!r}")
+        self.generation_seed_mode = generation_seed_mode
+        self.generation_seed_salt = generation_seed_salt
         # hybrid-reasoning bases need enable_thinking=False; the trainer derives
         # the same kwargs from its tokenizer so both renderings agree
         self.template_kwargs = template_kwargs(model)
@@ -62,6 +94,9 @@ class VllmClient:
         # served LoRA name = prefix + version name, so concurrent runs sharing
         # one server (each publishing v0001, v0002, ...) never collide
         self.lora_prefix = lora_prefix
+        # Explicitly external adapters are served under their exact name rather
+        # than the run-scoped prefix used for session versions.
+        self._external: set[str] = set()
         self.max_retries = 3
 
     # -- http -------------------------------------------------------------
@@ -87,7 +122,7 @@ class VllmClient:
                     time.sleep(min(60 * (attempt + 1), 180))
                     continue
                 raise RuntimeError(f"POST {path} failed ({e.code}): {detail[:500]}") from e
-            except (TimeoutError, socket.timeout, urllib.error.URLError, ConnectionError) as e:
+            except (TimeoutError, socket.timeout, urllib.error.URLError, ConnectionError):
                 if attempt >= self.max_retries:
                     raise
                 time.sleep(min(60 * (attempt + 1), 180))
@@ -102,6 +137,8 @@ class VllmClient:
         version = self._adapters.get(adapter)
         if version is not None and version.path is None:
             return self.model
+        if adapter in self._external:
+            return adapter
         return self.lora_prefix + adapter  # served LoRA name
 
     # -- Engine protocol ---------------------------------------------------
@@ -121,6 +158,8 @@ class VllmClient:
         }
         if self.template_kwargs:
             payload["chat_template_kwargs"] = self.template_kwargs
+        if self.generation_seed_mode == "bare_prompt_hash":
+            payload["seed"] = _bare_prompt_seed(messages, self.generation_seed_salt)
         try:
             data = self._post("/v1/chat/completions", payload)
         except RuntimeError as e:
@@ -157,41 +196,122 @@ class VllmClient:
             return ""  # yield the turn, the env settles it
         return _THINK_RE.sub("", text, count=1)
 
-    def _prompt_logprobs(self, messages: list[Message], adapter: str) -> list[float]:
-        """Per-token logprobs of the rendered prompt (0.0 at position 0)."""
+    def _prompt_logprobs(self, messages: list[Message], adapter: str,
+                         topk: int = 0) -> list[dict[int, float]]:
+        """Per-position {token_id: logprob} over the rendered prompt.
+
+        topk=0 gives the actual token only; topk=k adds the k most likely
+        alternatives at that position. Position 0 has no logprob ({}).
+        """
         payload = {
             "model": self._model_name(adapter),
             "messages": [m.to_dict() for m in messages],
             "temperature": 0.0,
             "max_tokens": 1,
-            "prompt_logprobs": 0,  # vLLM extra body: actual token only
+            "prompt_logprobs": topk,  # vLLM extra body
             "add_generation_prompt": False,  # score exactly the rendering
         }
         if self.template_kwargs:
             payload["chat_template_kwargs"] = self.template_kwargs
-        data = self._post("/v1/chat/completions", payload)
-        logps: list[float] = []
+        try:
+            data = self._post("/v1/chat/completions", payload)
+        except RuntimeError as e:
+            m = _MAX_LOGPROBS_RE.search(str(e))
+            if m is None or topk == 0:
+                raise
+            payload["prompt_logprobs"] = int(m.group(1))
+            print(f"[vllm] prompt_logprobs {topk} -> {m.group(1)} (server --max-logprobs)",
+                  flush=True)
+            data = self._post("/v1/chat/completions", payload)
+        out: list[dict[int, float]] = []
         for entry in data.get("prompt_logprobs") or []:
-            if not entry:  # first position has no logprob
-                logps.append(0.0)
-                continue
-            vals = [float(v["logprob"]) for v in entry.values()]
-            logps.append(vals[0] if len(vals) == 1 else min(vals))
-        return logps
+            out.append({int(t): float(v["logprob"]) for t, v in (entry or {}).items()})
+        return out
 
-    def score(self, messages: list[Message], *, adapter: str = "base") -> list[list[float]]:
-        out: list[list[float]] = []
+    @staticmethod
+    def _actual(entry: dict[int, float]) -> float:
+        """The scored token's logprob. Only valid for topk=0 responses, where
+        vLLM returns exactly one entry; with topk>0 index by the token id."""
+        if not entry:
+            return 0.0  # position 0
+        vals = list(entry.values())
+        return vals[0] if len(vals) == 1 else min(vals)
+
+    def _tokenizer(self):
+        tok = getattr(self, "_tok", None)
+        if tok is None:
+            from sediment.chat_template import load_tokenizer
+
+            tok = self._tok = load_tokenizer(self.model)
+        return tok
+
+    def _message_token_ids(self, messages: list[Message]) -> list[list[int]]:
+        """Per-message token ids from the LOCAL chat template (unverified)."""
+        tok = self._tokenizer()
+        dicts = [m.to_dict() for m in messages]
+        prev: list[int] = []
+        out: list[list[int]] = []
+        for i in range(1, len(dicts) + 1):
+            toks = list(tok.apply_chat_template(dicts[:i], tokenize=True, return_dict=False))
+            out.append(toks[len(prev):])
+            prev = toks
+        return out
+
+    def _local_ids(self, messages: list[Message], n_scored: int) -> Optional[list[list[int]]]:
+        """Local per-message token ids, or None if they disagree with what the
+        server actually scored (different template revision, tokenizer absent)."""
+        try:
+            ids = self._message_token_ids(messages)
+        except Exception:
+            return None
+        return ids if sum(len(x) for x in ids) == n_scored else None
+
+    def _score_by_prefix(self, messages: list[Message], adapter: str,
+                         topk: int) -> list[list[dict[int, float]]]:
+        """Fallback: one request per message prefix (O(n) requests)."""
+        out: list[list[dict[int, float]]] = []
         prev = 0
         for i in range(1, len(messages) + 1):
-            logps = self._prompt_logprobs(messages[:i], adapter)
-            if len(logps) < prev:
+            entries = self._prompt_logprobs(messages[:i], adapter, topk)
+            if len(entries) < prev:
                 raise RuntimeError(
                     f"prompt token count shrank at message {i - 1}; "
                     "chat template lacks the prefix property"
                 )
-            out.append(logps[prev:])
-            prev = len(logps)
+            out.append(entries[prev:])
+            prev = len(entries)
         return out
+
+    def score(self, messages: list[Message], *, adapter: str = "base") -> list[list[float]]:
+        flat = self._prompt_logprobs(messages, adapter, 0)
+        ids = self._local_ids(messages, len(flat))
+        if ids is None:  # local/server tokenization disagree: pay for the loop
+            return [[self._actual(e) for e in msg]
+                    for msg in self._score_by_prefix(messages, adapter, 0)]
+        out, pos = [], 0
+        for span in ids:
+            out.append([self._actual(e) for e in flat[pos:pos + len(span)]])
+            pos += len(span)
+        return out
+
+    def score_topk(self, messages: list[Message], *, adapter: str = "base",
+                   k: int = 32) -> tuple[list[list[int]], list[list[dict[int, float]]]]:
+        """Per-message (token_ids, top-k {token_id: logprob}) -- the teacher of
+        context distillation. Raises if the local tokenization cannot be verified
+        against the server's, since the KL target needs exact token alignment.
+        """
+        flat = self._prompt_logprobs(messages, adapter, k)
+        ids = self._local_ids(messages, len(flat))
+        if ids is None:
+            raise RuntimeError(
+                f"cannot align top-k teacher: server scored {len(flat)} tokens, "
+                "local chat template disagrees"
+            )
+        dists, pos = [], 0
+        for span in ids:
+            dists.append(flat[pos:pos + len(span)])
+            pos += len(span)
+        return ids, dists
 
     def load_adapter(self, version: AdapterVersion) -> None:
         self._adapters[version.name] = version
@@ -206,6 +326,15 @@ class VllmClient:
             if "already" in str(e).lower():  # idempotent re-load
                 return
             raise
+
+    def load_external(self, name: str, path: str) -> None:
+        """Register a LoRA served under its exact name (no run prefix)."""
+        self._external.add(name)
+        try:
+            self._post("/v1/load_lora_adapter", {"lora_name": name, "lora_path": path})
+        except RuntimeError as e:
+            if "already" not in str(e).lower():
+                raise
 
     def unload_adapter(self, name: str) -> None:
         """Drop a served LoRA (bounds --max-loras in long runs); idempotent."""
