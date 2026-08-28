@@ -39,26 +39,6 @@ Docs (Chinese): `docs/BACKGROUND.md` (positioning & claims),
 `docs/EXPERIMENTS.md` (P1–P4), `docs/SYSTEM.md` (4-GPU design),
 `docs/LITERATURE.md` (survey notes). Module APIs: `CONTRACTS.md`.
 
-## Stable memory signal pilot (2026-08-28): not supported
-
-The preregistered family-held-out 10-train / 12-test pilot completed all 22
-proposal windows and six arms, but failed its efficacy gate. Cluster-equal mean
-gain was 0.0102 for `stable`, versus 0.0241 for the discovery-selected single,
-0.0296 for the donor mean, and 0.0140 for shuffled memory. The stable model's
-write rate was zero: all 24 stable/shuffled synthesized adapters were
-parameter-identical no-ops, so their nonzero paired gains measure replay noise,
-not a learned update effect. Do not scale this version.
-
-See the [`full report`](loops/stable-signal-latest/report.md) and
-[`aggregate-only evidence`](loops/stable-signal-latest/evidence/aggregate_public.json).
-No raw trajectories, task-level pairs, adapters, checkpoints, or worker logs
-are included in the repository-facing bundle.
-
-The next experiment is train-feasibility-first: require confirmation-positive
-targets in multiple fitting clusters and at least one validation cluster, add
-an empirical reference-vs-reference replay control, then freeze a fresh
-family-held-out test and the complete imported runtime closure.
-
 ## Quickstart (mock, no GPU)
 
 ```bash
