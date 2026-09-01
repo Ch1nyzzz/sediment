@@ -6,7 +6,6 @@ import json
 from sediment.calltime import CallTimeHinter
 from sediment.config import StreamConfig
 from sediment.engine.mock import MockEngine
-from sediment.engine.vllm_client import _bare_prompt_seed
 from sediment.envs import ToyOrderEnv
 from sediment.harness import (
     HINT_INTERCEPT_OPEN,
@@ -71,8 +70,6 @@ def test_bare_view_removes_every_harness_edit_and_is_idempotent():
         ("assistant", tool_call("get_order_status")), ("tool", "Order status: shipped"),
         ("assistant", "Task Completed")]
     assert bare_view(bare) == bare
-    # the seed the engine uses ignores every harness edit
-    assert _bare_prompt_seed(msgs) == _bare_prompt_seed(bare)
 
 
 # -- working state -----------------------------------------------------------

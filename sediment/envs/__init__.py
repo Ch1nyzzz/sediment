@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from sediment.config import StreamConfig
-from sediment.envs.base import Env, parse_tool_call
+from sediment.envs.base import Env, parse_tool_call, tool_call_count
 from sediment.envs.envscaler import (
     DEFAULT_LOPD_DIR,
     EnvScalerAdapter,
@@ -21,6 +21,7 @@ __all__ = [
     "make_env",
     "make_toy_tasks",
     "parse_tool_call",
+    "tool_call_count",
 ]
 
 

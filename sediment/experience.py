@@ -3,7 +3,9 @@
 Every peer's task and stored reflection are mandatory and rendered before any
 intermediate trajectory steps. Steps are optional evidence chosen from the
 remaining soft character budget. The scored trajectory's OWN evidence remains
-outcome-only, so its body cannot be copied from context.
+outcome-only, so its body cannot be copied from context -- unless
+cfg.own_view="full" asks for the self-feedback teacher (the complete failed
+attempt), which is only safe to score on the states of a redo (kl_states).
 """
 from __future__ import annotations
 
@@ -302,7 +304,9 @@ def build_block(
 
     Each retrieved trajectory first contributes its full task, outcome, and
     full stored reflection. Numbered "action -> result" lines are added only
-    from the remaining budget. `own` contributes ONLY its outcome summary.
+    from the remaining budget. `own` contributes ONLY its outcome summary,
+    except under cfg.own_view="full", where its complete step list competes
+    for the budget like a peer's (task text omitted: it is the current task).
     Returns an empty-text block when there is nothing to render.
     """
     budget = getattr(cfg, "max_block_chars", 16000)
@@ -339,14 +343,24 @@ def build_block(
     if not retrieved and own is None:
         return ExperienceBlock(text="")
 
+    own_view = getattr(cfg, "own_view", "outcome")
+    if own_view not in ("outcome", "full"):
+        raise ValueError(f"unknown own view: {own_view!r}")
+    # (label, trajectory, is_peer): own is rendered like a peer but without its
+    # task text, and its steps are always the full list regardless of `view`
+    entries = [(f"Attempt {k}", traj, True) for k, traj in enumerate(retrieved, 1)]
+    if own is not None and own_view == "full":
+        entries.append(("Own attempt", own, False))
+
     lines = [EXPERIENCE_OPEN, HEADER, ""]
     step_pools: list[list[tuple[int, str]]] = []
-    for k, traj in enumerate(retrieved, 1):
+    for label, traj, is_peer in entries:
         ok, r = _outcome(traj)
         tag = "SUCCESS" if ok else "FAILED"
-        lines.append(f"Attempt {k} — {tag} (r={r})")
+        lines.append(f"{label} — {tag} (r={r})" if is_peer else
+                     f"{label} (your previous try on THIS task) — {tag} (r={r})")
         task_text = _first_user_text(traj)
-        if view == "full" and task_text:
+        if view == "full" and is_peer and task_text:
             lines.append(f"  Task from this attempt:\n{_indent(task_text)}")
         refl = reflection_overrides.get(
             id(traj), str(traj.meta.get("reflection", "") or "")
@@ -354,9 +368,10 @@ def build_block(
         if refl:
             lines.append(f"  Reflection after this attempt:\n{_indent(refl)}")
         lines.append("")
-        steps = _steps(traj) if view == "full" else []
+        with_steps = view == "full" or not is_peer
+        steps = _steps(traj) if with_steps else []
         pool = []
-        prioritized = _prioritized_step_indices(traj) if view == "full" else []
+        prioritized = _prioritized_step_indices(traj) if with_steps else []
         for idx in prioritized:
             # Apply the configured per-side truncation at render time.
             action, result = steps[idx]
@@ -368,7 +383,7 @@ def build_block(
     # compete for the soft budget, with one peer considered per round so a long
     # trajectory cannot starve the other retrieved memories.
     size = sum(len(x) + 1 for x in lines) + len(EXPERIENCE_CLOSE) + 1
-    selected: list[list[tuple[int, str]]] = [[] for _ in retrieved]
+    selected: list[list[tuple[int, str]]] = [[] for _ in entries]
     cursors = [0] * len(step_pools)
     section_cost = len("Selected intermediate steps (highest-value evidence first):") + 2
     while step_pools and any(c < len(pool) for c, pool in zip(cursors, step_pools)):
@@ -378,7 +393,7 @@ def build_block(
                 continue
             idx, line = pool[cursor]
             cursors[peer_idx] += 1
-            heading_cost = len(f"Attempt {peer_idx + 1} selected steps:") + 1 \
+            heading_cost = len(f"{entries[peer_idx][0]} selected steps:") + 1 \
                 if not selected[peer_idx] else 0
             if not any(selected):
                 heading_cost += section_cost
@@ -389,10 +404,10 @@ def build_block(
 
     if any(selected):
         lines.extend(["Selected intermediate steps (highest-value evidence first):", ""])
-        for peer_idx, chosen in enumerate(selected, 1):
+        for (label, _, _), chosen in zip(entries, selected):
             if not chosen:
                 continue
-            lines.append(f"Attempt {peer_idx} selected steps:")
+            lines.append(f"{label} selected steps:")
             # Once selected by priority, show steps chronologically.
             lines.extend(line for _, line in sorted(chosen))
             lines.append("")

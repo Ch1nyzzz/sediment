@@ -15,6 +15,7 @@ from typing import Any, Optional, Protocol, runtime_checkable
 from sediment.types import Message
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
+_TOOL_CALL_OPEN_RE = re.compile(r"<tool_call>", re.IGNORECASE)
 
 
 @runtime_checkable
@@ -31,6 +32,10 @@ class Env(Protocol):
         done, reward). Observation role is "tool" for genuine tool results
         and "user" for parse-error / invalid-action observations that
         re-enter the conversation as plain user messages."""
+        ...
+
+    def score_current_state(self) -> float:
+        """Score the current state without mutating or terminating the env."""
         ...
 
 
@@ -55,3 +60,8 @@ def parse_tool_call(text: str) -> Optional[dict[str, Any]]:
         "name": str(call.get("name") or ""),
         "arguments": args if isinstance(args, dict) else {},
     }
+
+
+def tool_call_count(text: str) -> int:
+    """Count emitted ``<tool_call>`` openings, including malformed blocks."""
+    return len(_TOOL_CALL_OPEN_RE.findall(text))

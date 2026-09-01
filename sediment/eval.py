@@ -86,6 +86,35 @@ def write_report(out_dir: str | Path, cfg: StreamConfig, records: Sequence[Any],
         "window_means": {str(w): m for w, m in means.items()},
         "adapters": [getattr(v, "name", str(v)) for v in history],
     }
+    metas = [_field(record, "meta", {}) or {} for record in records]
+    reasons = [meta.get("termination_reason") for meta in metas]
+    reasons = [str(reason) for reason in reasons if reason]
+    if reasons:
+        summary["termination_counts"] = {
+            reason: reasons.count(reason) for reason in sorted(set(reasons))
+        }
+        summary["forced_settle_rate"] = (
+            sum(bool(meta.get("forced_settle")) for meta in metas) / n if n else 0.0
+        )
+
+    checkpoint_names = sorted({
+        str(name)
+        for meta in metas
+        for name in (meta.get("reward_checkpoints", {}) or {})
+    }, key=int)
+    if checkpoint_names:
+        summary["checkpoint_metrics"] = {}
+        for name in checkpoint_names:
+            values = [
+                float(meta["reward_checkpoints"][name])
+                for meta in metas
+                if name in (meta.get("reward_checkpoints", {}) or {})
+            ]
+            summary["checkpoint_metrics"][name] = {
+                "num_records": len(values),
+                "mean_reward": sum(values) / len(values),
+                "success_rate": sum(value >= 0.999 for value in values) / len(values),
+            }
     (out / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     _print_table(records, means, summary)

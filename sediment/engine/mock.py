@@ -93,6 +93,10 @@ class MockEngine:
     ) -> str:
         return self.adapter_policies.get(adapter, self._policy)(messages)
 
+    def count_tokens(self, messages: list[Message]) -> int:
+        # One role marker per message plus one next-assistant boundary.
+        return 1 + sum(1 + len(mock_tokenize(message.content)) for message in messages)
+
     def score(self, messages: list[Message], *, adapter: str = "base") -> list[list[float]]:
         ctx = _first_user_content(messages)
         has_ctx = EXPERIENCE_OPEN in ctx

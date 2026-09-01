@@ -78,8 +78,6 @@ def build_engines(cfg: StreamConfig) -> list[Any]:
         urls = cfg.extra.get("base_urls") or [
             f"http://127.0.0.1:{8000 + i}/v1" for i in range(cfg.num_engines)]
         return [cls(u, cfg.model, max_context=cfg.max_model_len,
-                    generation_seed_mode=cfg.generation_seed_mode,
-                    generation_seed_salt=cfg.generation_seed_salt,
                     lora_prefix=f"{cfg.run_id}-") for u in urls]
     raise SystemExit(f"unknown engine: {cfg.engine}")
 
@@ -112,6 +110,9 @@ def _load_rl_tasks(cfg: StreamConfig) -> tuple[list[dict], list[dict]]:
         start, end = cfg.extra["corpus_slice"]
         corpus = corpus[start:end]
     keep = cfg.extra.get("keep_families")
+    exclude = cfg.extra.get("exclude_families")
+    if keep and exclude:
+        raise ValueError("keep_families and exclude_families are mutually exclusive")
     if keep:
         # Six of the seventeen tail families produced 1 success in 256 tasks
         # under BOTH frozen and icl_refl (08-26): a third of the wall clock
@@ -120,16 +121,63 @@ def _load_rl_tasks(cfg: StreamConfig) -> tuple[list[dict], list[dict]]:
         # with the full-tail runs -- and peers now come only from these
         # families, which makes retrieval slightly richer too.
         corpus = [t for t in corpus if t["env_family"] in set(keep)]
+    elif exclude:
+        # Two-way protocol: online is an explicit family list and held-out is
+        # its exact complement in rl_scenarios. Expressing the complement here
+        # prevents a newly added family from silently falling outside both.
+        excluded = set(exclude)
+        corpus = [t for t in corpus if t["env_family"] not in excluded]
+    kf = cfg.extra.get("keep_task_ids_file")
+    if kf:
+        # task-level stream composition (repairable-task split, 08-31): the id
+        # list IS the split definition; ordering is handled below as usual
+        import json as _json
+        with open(kf) as fh:
+            keep_ids = set(_json.load(fh))
+        corpus = [t for t in corpus if t["task_id"] in keep_ids]
+        print(f"[tasks] keep_task_ids_file: {len(corpus)} tasks kept", flush=True)
+    if cfg.extra.get("interleave_families"):
+        # round-robin across families (stable within a family): a family-sorted
+        # stream front-loads the hardest families, so repairs (the only
+        # training signal of the fork arms) arrive only when few tasks are
+        # left to benefit -- and a single order is not a credible curve anyway.
+        by_fam: dict[str, list] = {}
+        for t in corpus:
+            by_fam.setdefault(t["env_family"], []).append(t)
+        fams = sorted(by_fam)
+        corpus = [by_fam[f][i] for i in range(max(len(v) for v in by_fam.values()))
+                  for f in fams if i < len(by_fam[f])]
     span = cfg.num_tasks + cfg.gate_probe_tasks
     pool = corpus[-span:]
     before = corpus[-span - cfg.probe_extra_before:-span] if cfg.probe_extra_before else []
     return pool[: cfg.num_tasks], pool[cfg.num_tasks:] + before
 
 
+def _load_benchmark_tasks(cfg: StreamConfig) -> tuple[list[dict], list[dict]]:
+    benchmark = str(cfg.extra.get("benchmark") or "")
+    manifest = cfg.extra.get("task_manifest")
+    if benchmark != "intercode_sql" or not manifest:
+        raise ValueError(
+            "benchmark split currently requires extra.benchmark='intercode_sql' "
+            "and extra.task_manifest"
+        )
+    from sediment.envs.intercode_sql import read_manifest
+
+    corpus = read_manifest(str(manifest))
+    mysql_config = dict(cfg.extra.get("intercode_mysql") or {})
+    for task in corpus:
+        task["intercode_mysql"] = mysql_config
+    if cfg.num_tasks > len(corpus):
+        raise ValueError(
+            f"requested {cfg.num_tasks} benchmark tasks from a {len(corpus)}-row manifest"
+        )
+    return corpus[: cfg.num_tasks], []
+
+
 def main(argv: Optional[list[str]] = None) -> dict[str, Any]:
     cfg = parse_args(argv)
-    if cfg.split not in ("toy", "rl"):
-        raise SystemExit("run_stream supports split='toy' or split='rl' (EnvScaler)")
+    if cfg.split not in ("toy", "rl", "benchmark"):
+        raise SystemExit("run_stream supports split='toy', 'rl', or 'benchmark'")
     run_dir = Path(cfg.out_dir) / cfg.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     # Isolate mutable run state under the run dir unless explicitly overridden.
@@ -153,8 +201,10 @@ def main(argv: Optional[list[str]] = None) -> dict[str, Any]:
     probe_tasks: list[dict] = []
     if cfg.split == "toy":
         tasks = make_toy_tasks(cfg.num_tasks, cfg.seed)
-    else:
+    elif cfg.split == "rl":
         tasks, probe_tasks = _load_rl_tasks(cfg)
+    else:
+        tasks, probe_tasks = _load_benchmark_tasks(cfg)
     engines = build_engines(cfg)
     from sediment.types import StreamRecord
     prior: list = []

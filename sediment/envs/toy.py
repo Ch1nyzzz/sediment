@@ -9,7 +9,7 @@ from __future__ import annotations
 import random
 from typing import Any, Optional
 
-from sediment.envs.base import parse_tool_call
+from sediment.envs.base import parse_tool_call, tool_call_count
 from sediment.types import Message
 
 _STATUSES = ("pending", "shipped", "delivered")
@@ -63,6 +63,12 @@ class ToyOrderEnv:
 
     def step(self, action_text: str) -> tuple[list[Message], bool, float]:
         # All genuine observations here are tool results, hence role "tool".
+        n_calls = tool_call_count(action_text)
+        if n_calls > 1:
+            return [Message(
+                "tool",
+                f"Error: exactly one tool call is allowed per turn; received {n_calls}.",
+            )], False, 0.0
         call = parse_tool_call(action_text)
         if call is None:  # plain-text reply = final answer
             return self._finish(action_text)
@@ -79,6 +85,10 @@ class ToyOrderEnv:
         if name in ("answer", "chat_with_user"):
             return self._finish(str(args.get("text") or args.get("content") or ""))
         return [Message("tool", f"Error: unknown tool {name}")], False, 0.0
+
+    def score_current_state(self) -> float:
+        """Grade the current toy state without inventing a final answer."""
+        return self._grade()
 
     def _finish(self, answer: str) -> tuple[list[Message], bool, float]:
         self.answer_text = answer

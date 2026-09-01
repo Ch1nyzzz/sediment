@@ -96,6 +96,35 @@ def test_write_report(tmp_path, capsys):
     assert "window" in out and "v0001" in out
 
 
+def test_write_report_aggregates_termination_and_reward_checkpoints(tmp_path):
+    cfg = StreamConfig(run_id="budget", reward_checkpoint_steps=[1, 2])
+    records = [
+        StreamRecord(
+            task_id="a", window=0, adapter="base", success=True, reward=1.0,
+            meta={
+                "termination_reason": "natural_finish",
+                "forced_settle": False,
+                "reward_checkpoints": {"1": 0.5, "2": 1.0},
+            },
+        ),
+        StreamRecord(
+            task_id="b", window=0, adapter="base", success=False, reward=0.5,
+            meta={
+                "termination_reason": "max_steps",
+                "forced_settle": True,
+                "reward_checkpoints": {"1": 0.0, "2": 0.5},
+            },
+        ),
+    ]
+    summary = ev.write_report(tmp_path, cfg, records, registry=None)
+    assert summary["termination_counts"] == {"max_steps": 1, "natural_finish": 1}
+    assert summary["forced_settle_rate"] == pytest.approx(0.5)
+    assert summary["checkpoint_metrics"] == {
+        "1": {"num_records": 2, "mean_reward": 0.25, "success_rate": 0.0},
+        "2": {"num_records": 2, "mean_reward": 0.75, "success_rate": 0.5},
+    }
+
+
 # ------------------------------------------------------------- script smokes
 
 def _module(name: str, **attrs) -> types.ModuleType:
@@ -283,6 +312,43 @@ def test_run_stream_set_rejects_unknown_field(tmp_path, monkeypatch):
     mod = _load_script("run_stream")
     with pytest.raises(SystemExit):
         mod.main(["--engine", "mock", "--set", "not_a_field=1"])
+
+
+def test_rl_family_filters_support_exact_two_way_complement(monkeypatch):
+    _install_stubs(monkeypatch)
+    rows = [
+        {"task_id": f"env_{family}_rl-task_1", "payload": {}}
+        for family in (141, 142, 143)
+    ]
+    envscaler = _module(
+        "sediment.envs.envscaler",
+        list_tasks=lambda *_args, **_kwargs: [dict(row) for row in rows],
+    )
+    monkeypatch.setitem(sys.modules, "sediment.envs.envscaler", envscaler)
+    mod = _load_script("run_stream")
+
+    online, probes = mod._load_rl_tasks(StreamConfig(
+        split="rl", num_tasks=1, gate_probe_tasks=0,
+        extra={"keep_families": ["env_141"]},
+    ))
+    heldout, heldout_probes = mod._load_rl_tasks(StreamConfig(
+        split="rl", num_tasks=2, gate_probe_tasks=0,
+        extra={"exclude_families": ["env_141"]},
+    ))
+    assert [row["task_id"] for row in online] == ["env_141_rl-task_1"]
+    assert [row["task_id"] for row in heldout] == [
+        "env_142_rl-task_1", "env_143_rl-task_1",
+    ]
+    assert probes == heldout_probes == []
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        mod._load_rl_tasks(StreamConfig(
+            split="rl", num_tasks=1, gate_probe_tasks=0,
+            extra={
+                "keep_families": ["env_141"],
+                "exclude_families": ["env_142"],
+            },
+        ))
 
 
 def test_run_stream_initial_adapter_for_heldout_eval(tmp_path, monkeypatch):

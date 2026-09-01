@@ -1,4 +1,4 @@
-"""Harness-side context edits shared by rollout, engine seeding and storage.
+"""Harness-side context edits shared by rollout and storage.
 
 Three tag families mark text the HARNESS (neither the model nor the env) put
 into a conversation:
@@ -11,8 +11,8 @@ An intercepted draft (Recuris call-time invocation) is an assistant turn that
 was never executed, followed by a user message that STARTS with
 ``<experience_hint intercepted>``; both are harness turns. ``bare_view`` removes
 all of it and yields the prompt the model would have seen with no harness.
-The common-random-number seed, the stored student view and every analysis
-script work on that view, so harness arms stay paired with frozen.
+Stored student views and analysis scripts work on that view. Generation is
+independently sampled; stripping harness text does not imply RNG pairing.
 """
 from __future__ import annotations
 

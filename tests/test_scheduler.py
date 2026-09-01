@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+import time
 import types
 from typing import Any, Optional
 
 import pytest
 
 import sediment
+import sediment.harness  # noqa: F401  (binds sediment.envs.base before the stub replaces sediment.envs)
 from sediment.config import StreamConfig
 from sediment.router import Router
 from sediment.scheduler import run_stream
@@ -71,11 +74,14 @@ class StubToyOrderEnv:
 
 
 def stub_run_episode(engine, env, task, cfg, *, adapter: str,
-                     experience: Optional[ExperienceBlock] = None) -> Trajectory:
+                     experience: Optional[ExperienceBlock] = None,
+                     stepwise=None, **_kwargs) -> Trajectory:
     messages = env.reset(task)
     if experience is not None:  # block injected into first user message (real tag format)
         messages[-1] = Message("user", f"<previous_attempts>\n{experience.text}\n</previous_attempts>"
                                        f"\n\n{messages[-1].content}")
+    if stepwise is not None:
+        stepwise.pre_generate(messages)
     out = engine.generate(messages, adapter=adapter,
                           temperature=cfg.temperature, max_tokens=cfg.max_tokens)
     messages = messages + [Message("assistant", out)]
@@ -83,7 +89,9 @@ def stub_run_episode(engine, env, task, cfg, *, adapter: str,
     messages = messages + obs
     return Trajectory(task_id=task["task_id"], env_family=task["env_family"],
                       messages=messages, reward=reward, success=reward > 0,
-                      adapter=adapter, steps=1)
+                      adapter=adapter, steps=1,
+                      meta=({"stepwise_events": list(stepwise.events)}
+                            if stepwise is not None else {}))
 
 
 def stub_build_block(retrieved: list[Trajectory], own: Optional[Trajectory],
@@ -245,6 +253,42 @@ def test_router_stable_hash_and_all():
 
 # ---------------------------------------------------------------- scheduler tests
 
+def test_rollout_workers_overrides_asyncio_default_pool(monkeypatch):
+    import asyncio
+    import sediment.scheduler as scheduler
+
+    lock = threading.Lock()
+    active = peak = 0
+
+    async def fake_stream(*args, **kwargs):
+        async def one():
+            def work():
+                nonlocal active, peak
+                with lock:
+                    active += 1
+                    peak = max(peak, active)
+                time.sleep(0.05)
+                with lock:
+                    active -= 1
+
+            await asyncio.to_thread(work)
+
+        await asyncio.gather(*(one() for _ in range(40)))
+        return []
+
+    monkeypatch.setattr(scheduler, "_stream", fake_stream)
+    cfg = StreamConfig(extra={"rollout_workers": 40})
+    assert scheduler.run_stream([], [], None, None, None, None, cfg) == []
+    assert peak == 40
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, True, "64"])
+def test_rollout_workers_must_be_positive_integer(value):
+    cfg = StreamConfig(extra={"rollout_workers": value})
+    with pytest.raises(ValueError, match="positive integer"):
+        run_stream([], [], None, None, None, None, cfg)
+
+
 def test_stream_predict_then_update(stub_modules, tmp_path):
     records, engines, buffer, gate, registry, seen = run_once(tmp_path)
 
@@ -382,6 +426,72 @@ def test_binary_mode_proposes_by_gate_count_not_surprise(stub_modules, tmp_path)
     assert registry.publishes == 1
 
 
+def test_stepwise_feedback_stream_trains_successes_and_failures(stub_modules, tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.stepwise_feedback_distill = True
+    cfg.kl_states = "first"
+    cfg.kl_teacher = "local"
+    cfg.kl_target = True
+    cfg.weight_mode = "sft"
+    cfg.propose_rule = "all"
+    cfg.retry_on_fail = False
+    cfg.turn_decay = 0.6
+    trained: list[list[TrainSample]] = []
+
+    def capture_trainer(samples, parent, cfg, workdir):
+        trained.append(list(samples))
+        return stub_trainer(samples, parent, cfg, workdir)
+
+    buffer, gate, registry = StubBuffer(), StubGate(cfg), StubRegistry()
+    records = run_stream(make_tasks(4), [ScriptedMockEngine()], buffer, gate,
+                         capture_trainer, registry, cfg)
+
+    # All four first attempts contribute exactly one executed assistant turn,
+    # including the two naturally correct and two naturally failed episodes.
+    assert len(trained) == 1
+    samples = trained[0]
+    assert sorted(s.task_id for s in samples) == [f"t{i}@turn00" for i in range(4)]
+    assert [r.success for r in records] == [True, False, True, False]
+    assert all(r.meta["proposed"] for r in records)
+    assert all(r.meta["stepwise"]["supervised_turns"] == 1 for r in records)
+    assert all("behavior_score" in r.timings for r in records)
+    assert all(s.loss_scale == 1.0 for s in samples)
+    assert all(s.behavior_logprobs_by_msg[-1] == [0.0] for s in samples)
+    for sample in samples:
+        succeeded = int(sample.task_id.removeprefix("t").split("@")[0]) % 2 == 0
+        feedback = sample.teacher_contexts["feedback"]
+        assert ("ok" if succeeded else "bad") in feedback
+        assert sample.messages[-1].role == "assistant"
+        assert sample.token_weights_by_msg[-1] == [1.0]
+    assert registry.publishes == 1
+
+
+def test_stepwise_feedback_failure_only_excludes_successes(stub_modules, tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.stepwise_feedback_distill = True
+    cfg.stepwise_feedback_failures_only = True
+    cfg.kl_states = "first"
+    cfg.kl_teacher = "local"
+    cfg.kl_target = True
+    cfg.weight_mode = "sft"
+    cfg.propose_rule = "all"
+    cfg.retry_on_fail = False
+    trained: list[list[TrainSample]] = []
+
+    def capture_trainer(samples, parent, cfg, workdir):
+        trained.append(list(samples))
+        return stub_trainer(samples, parent, cfg, workdir)
+
+    records = run_stream(make_tasks(4), [ScriptedMockEngine()], StubBuffer(),
+                         StubGate(cfg), capture_trainer, StubRegistry(), cfg)
+
+    assert len(trained) == 1
+    assert sorted(s.task_id for s in trained[0]) == ["t1@turn00", "t3@turn00"]
+    assert [r.meta["proposed"] for r in records] == [False, True, False, True]
+    assert records[0].meta["stepwise"]["skipped"] == "successful_first_attempt"
+    assert records[2].meta["stepwise"]["skipped"] == "successful_first_attempt"
+
+
 def test_rollback_republishes_previous_version_when_probe_regressed(stub_modules, tmp_path, monkeypatch):
     """Window 0 merge regresses the probe -> window 1 re-probes v0000; it wins ->
     v0000's weights are republished and window 1's candidate is discarded."""
@@ -411,3 +521,148 @@ def test_rollback_republishes_previous_version_when_probe_regressed(stub_modules
     assert [v.name for v in registry.history()] == ["v0000", "v0001"]
     assert registry.current().name == "v0000"
     assert "v0000" in probed[2:]  # re-probed at window 1
+
+
+# ---------------------------------------------------------------- kl_states=retry
+
+class BlockAwareMockEngine(ScriptedMockEngine):
+    """HARD is solved by v0000 only when the own-failure block is in context."""
+
+    def generate(self, messages, *, adapter="base", temperature=0.0, max_tokens=64):
+        user = next(m for m in reversed(messages) if m.role == "user")
+        if "<previous_attempts>" in user.content and "block:" in user.content:
+            self.calls.append((user.content.splitlines()[-1].split("|")[0], adapter))
+            return "CORRECT"
+        return super().generate(messages, adapter=adapter, temperature=temperature,
+                                max_tokens=max_tokens)
+
+
+class FeedbackAwareMockEngine(ScriptedMockEngine):
+    """HARD is solved only when turn-1 previous-attempt feedback is visible."""
+
+    def generate(self, messages, *, adapter="base", temperature=0.0, max_tokens=64):
+        if any("<experience_hint previous_attempt>" in m.content for m in messages):
+            user = next(m for m in reversed(messages) if m.role == "user")
+            self.calls.append((user.content.splitlines()[-1].split("|")[0], adapter))
+            return "CORRECT"
+        return super().generate(messages, adapter=adapter, temperature=temperature,
+                                max_tokens=max_tokens)
+
+
+def _retry_cfg(tmp_path, **kw) -> StreamConfig:
+    cfg = make_cfg(tmp_path)
+    cfg.weight_mode, cfg.kl_states, cfg.own_view = "sft", "retry", "full"
+    cfg.propose_rule = "advantage"
+    for k, v in kw.items():
+        setattr(cfg, k, v)
+    return cfg
+
+
+def _run_retry_mode(tmp_path, engine, **kw):
+    cfg = _retry_cfg(tmp_path, **kw)
+    trained: list[list[TrainSample]] = []
+
+    def trainer(samples, parent, cfg, workdir):
+        trained.append(list(samples))
+        return stub_trainer(samples, parent, cfg, workdir)
+
+    buffer, gate, registry = StubBuffer(), StubGate(cfg), StubRegistry()
+    records = run_stream(make_tasks(4), [engine], buffer, gate, trainer, registry, cfg)
+    return records, buffer, registry, trained
+
+
+def test_kl_states_retry_trains_on_the_stripped_redo(stub_modules, tmp_path):
+    records, buffer, registry, trained = _run_retry_mode(tmp_path, BlockAwareMockEngine())
+    # metric = first attempt (HARD fails under v0000); the redo succeeded
+    assert [r.success for r in records] == [True, False, True, False]
+    for r in records:
+        hard = r.meta["env_family"] == HARD
+        assert r.retried is hard and r.meta["proposed"] is hard and r.gated_in is hard
+        if hard:
+            assert r.meta["redo_success"] is True and r.meta["redo_reward"] == 1.0
+            assert "hindsight" in r.timings  # the REDO was scored, not the first attempt
+        else:
+            assert "hindsight" not in r.timings
+    # the train samples are the redos in the student view: successful (tool "ok"),
+    # with the own-failure block stripped from the first user message
+    assert len(trained) == 1 and [s.task_id for s in trained[0]] == ["t1", "t3"]
+    for s in trained[0]:
+        assert s.messages[-1].content == "ok"
+        user = next(m for m in s.messages if m.role == "user")
+        assert "<previous_attempts>" not in user.content and user.content.startswith(s.task_id)
+    # buffer stores the redo stripped as well, marked as a retry
+    retries = [t for t in buffer.items if t.is_retry]
+    assert sorted(t.task_id for t in retries) == ["t1", "t3"]
+    assert all("<previous_attempts>" not in t.messages[1].content for t in retries)
+    assert all(t.meta["served_block_chars"] > 0 for t in retries)
+    assert registry.publishes == 1
+
+
+def test_kl_states_retry_advantage_drops_failed_redos_all_keeps_them(stub_modules, tmp_path):
+    # plain engine: the redo fails too -> advantage proposes nothing
+    records, _, registry, trained = _run_retry_mode(tmp_path, ScriptedMockEngine())
+    assert all(r.meta["proposed"] is False for r in records)
+    assert [r.retried for r in records] == [False, True, False, True]
+    assert registry.publishes == 0 and trained == []
+    # propose_rule=all: the failed redo is still a KL sample
+    records, _, registry, trained = _run_retry_mode(tmp_path, ScriptedMockEngine(),
+                                                     propose_rule="all")
+    assert [r.meta["proposed"] for r in records] == [False, True, False, True]
+    assert all(r.meta["redo_success"] is False for r in records if r.retried)
+    assert len(trained) == 1 and [s.task_id for s in trained[0]] == ["t1", "t3"]
+    assert registry.publishes == 1
+
+
+def test_trajectory_dpo_pairs_complete_redo_with_complete_first_attempt(
+        stub_modules, tmp_path):
+    records, _, _, trained = _run_retry_mode(
+        tmp_path, BlockAwareMockEngine(), fork_objective="trajectory_dpo")
+    assert len(trained) == 1 and len(trained[0]) == 2
+    for sample in trained[0]:
+        assert sample.rejected is None
+        assert sample.rejected_messages is not None
+        assert sample.messages[-1].content == "ok"  # complete successful redo
+        assert sample.rejected_messages[-1].content == "bad"  # complete failed first
+        assert sum(m.role == "assistant" for m in sample.messages) >= 1
+        rec = next(r for r in records if r.task_id == sample.task_id)
+        assert rec.meta["preference_scope"] == "trajectory"
+
+
+def test_feedback_redo_uses_four_state_aligned_attempts_without_principles(
+        stub_modules, tmp_path):
+    records, _, _, trained = _run_retry_mode(
+        tmp_path,
+        FeedbackAwareMockEngine(),
+        fork_objective="trajectory_dpo",
+        redo_block_samples=0,
+        redo_stepwise_samples=0,
+        redo_feedback_samples=4,
+        stepwise_experience=False,
+        stepwise_extract=False,
+    )
+    assert len(trained) == 1 and len(trained[0]) == 2
+    for sample in trained[0]:
+        rec = next(r for r in records if r.task_id == sample.task_id)
+        assert rec.meta["redo_group"] == {
+            "n": 4,
+            "n_success": 4,
+            "chosen": 0,
+            "chosen_context": "previous_attempt_feedback",
+            "success_idx": [0, 1, 2, 3],
+        }
+        assert rec.meta["attempt_feedback_hints"] == 1
+        assert all("previous_attempt" not in m.content for m in sample.messages)
+
+
+def test_own_view_full_requires_retry_states(stub_modules, tmp_path, capsys):
+    cfg = make_cfg(tmp_path)
+    cfg.own_view = "full"  # kl_states stays "first": scored tokens sit in the block
+    # 08-31: demoted from ValueError to a printed warning (multi-turn agentic
+    # failures need the full trajectory as feedback; copy risk is monitored)
+    run_stream(make_tasks(2), [ScriptedMockEngine()], StubBuffer(), StubGate(cfg),
+               stub_trainer, StubRegistry(), cfg)
+    assert "copy risk" in capsys.readouterr().out
+    cfg.own_view, cfg.kl_states = "outcome", "sometimes"
+    with pytest.raises(ValueError, match="kl_states"):
+        run_stream(make_tasks(2), [ScriptedMockEngine()], StubBuffer(), StubGate(cfg),
+                   stub_trainer, StubRegistry(), cfg)

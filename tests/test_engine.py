@@ -129,45 +129,13 @@ def test_vllm_generate_model_routing():
     payload = calls[-1][1]
     assert payload["messages"] == [{"role": "user", "content": "hi"}]
     assert payload["temperature"] == 0.2 and payload["max_tokens"] == 16
+    assert "seed" not in payload
 
 
-def test_vllm_common_seed_ignores_retrieved_block_but_tracks_bare_state():
+def test_vllm_generation_never_adds_a_request_seed():
     client, calls = make_client()
-    client.generation_seed_mode = "bare_prompt_hash"
-    bare = [Message("system", "sys"), Message("user", "solve query")]
-    with_memory = [
-        Message("system", "sys"),
-        Message("user", "<previous_attempts>donor A</previous_attempts>\n\nsolve query"),
-    ]
-    other_memory = [
-        Message("system", "sys"),
-        Message("user", "<previous_attempts>donor B</previous_attempts>\n\nsolve query"),
-    ]
-    for messages in (bare, with_memory, other_memory):
-        client.generate(messages, temperature=0.7, max_tokens=16)
-    assert calls[-3][1]["seed"] == calls[-2][1]["seed"] == calls[-1][1]["seed"]
-    client.generate(bare + [Message("assistant", "next state")], max_tokens=16)
-    assert calls[-1][1]["seed"] != calls[-2][1]["seed"]
-
-
-def test_vllm_common_seed_salt_creates_reproducible_replicates():
-    messages = [Message("user", "solve query")]
-    first, first_calls = make_client()
-    first.generation_seed_mode = "bare_prompt_hash"
-    first.generation_seed_salt = 1
-    second, second_calls = make_client()
-    second.generation_seed_mode = "bare_prompt_hash"
-    second.generation_seed_salt = 2
-    first.generate(messages)
-    first.generate(messages)
-    second.generate(messages)
-    assert first_calls[-1][1]["seed"] == first_calls[-2][1]["seed"]
-    assert first_calls[-1][1]["seed"] != second_calls[-1][1]["seed"]
-
-
-def test_vllm_rejects_unknown_generation_seed_mode():
-    with pytest.raises(ValueError, match="generation seed mode"):
-        VllmClient("http://localhost:8000/", "qwen-base", generation_seed_mode="bad")
+    client.generate([Message("user", "solve query")], max_tokens=16)
+    assert "seed" not in calls[-1][1]
 
 
 def test_vllm_score_per_message_slices():

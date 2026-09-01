@@ -219,15 +219,15 @@ def test_chunked_kl_matches_monolithic_loss_and_gradient():
 
 def test_sft_credits_outside_the_tool_call_and_damps_copied_values():
     """The gated modes credit only the tool-call interior; sft must cover the
-    whole action (including how a turn ends), and must damp argument values
-    that are copyable from context."""
+    whole action (including how a turn ends). (grounded_weight token damping
+    was removed 08-31: the 0.2-vs-1.0 held-out ablation showed no benefit.)"""
     pytest.importorskip("transformers")
     from sediment.chat_template import load_tokenizer
     from sediment.hindsight import sft_sample
     from sediment.semantic import tool_call_region_mask
     from sediment.trainer import _encode
 
-    cfg = StreamConfig(weight_mode="sft", train_channels="act", grounded_weight=0.2,
+    cfg = StreamConfig(weight_mode="sft", train_channels="act",
                        max_seq_len=4096)
     tokenizer = load_tokenizer(cfg.model)
     traj = _traj()
@@ -247,5 +247,4 @@ def test_sft_credits_outside_the_tool_call_and_damps_copied_values():
     region = tool_call_region_mask(tokenizer, traj.messages[2].content, spans[2])
     outside = [ws[off + j] for j in range(len(spans[2])) if not region[j]]
     assert any(w == 1.0 for w in outside), "narration/closing tokens must be supervised"
-    damped = [w for w in ws if 0.0 < w < 1.0]
-    assert damped and all(abs(w - 0.2) < 1e-9 for w in damped)  # GRP-C came from context
+    assert not any(0.0 < w < 1.0 for w in ws)  # no token-level damping remains

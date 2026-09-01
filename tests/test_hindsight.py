@@ -151,6 +151,33 @@ def test_build_block_own_outcome_summary_only():
     assert build_block([], None, cfg).text == ""
 
 
+def test_build_block_own_view_full_renders_own_steps():
+    """own_view=full: the self-feedback teacher reads the COMPLETE failed
+    attempt (every action -> result) plus the outcome trailer; the task text
+    is not repeated (it is the current task) and own is never a source peer."""
+    cfg = StreamConfig(own_view="full")
+    own = make_traj(task_id="me", reward=0.0, success=False)
+    block = build_block([], own, cfg)
+    assert block.includes_own_outcome is True and block.source_task_ids == []
+    assert "Own attempt (your previous try on THIS task) — FAILED (r=0.00)" in block.text
+    assert "Own attempt selected steps:" in block.text
+    assert "  1. check status -> status shipped locked" in block.text
+    assert "  2. refuse -> (episode end)" in block.text
+    assert "Task from this attempt" not in block.text
+    assert "ultimately FAILED (reward=0.00)" in block.text
+    assert "Final feedback: status shipped locked" in block.text
+    # peers keep their numbering next to it, and their task text
+    peer = make_traj(task_id="a", reward=1.0, success=True)
+    both = build_block([peer], own, cfg).text
+    assert "Attempt 1 — SUCCESS (r=1.00)" in both and "Task from this attempt" in both
+    assert both.index("Attempt 1 selected steps:") < both.index("Own attempt selected steps:")
+    # steps render for own even when peers are reflection-only
+    only = build_block([peer], own, StreamConfig(own_view="full", experience_view="reflection_only")).text
+    assert "Own attempt selected steps:" in only and "Attempt 1 selected steps:" not in only
+    with pytest.raises(ValueError):
+        build_block([], own, StreamConfig(own_view="verbatim"))
+
+
 def test_build_block_keeps_all_peer_tasks_and_reflections_before_steps():
     peers = []
     for i in range(4):

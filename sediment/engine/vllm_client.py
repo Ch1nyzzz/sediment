@@ -15,7 +15,6 @@ LoRA adapters are registered at runtime via POST /v1/load_lora_adapter
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import socket
 import time
@@ -51,29 +50,10 @@ _THINK_OPEN = re.compile(r"^\s*<think>", re.DOTALL)
 _MAX_LOGPROBS_RE = re.compile(r"greater than max allowed: (\d+)")
 
 
-def _without_experience(messages: list[Message]) -> list[dict[str, str]]:
-    """Canonical prompt view shared by memory/no-memory paired generations:
-    no retrieved block, no call-time hints, no working state (harness.bare_view)."""
-    from sediment.harness import bare_view
-
-    return [m.to_dict() for m in bare_view(messages)]
-
-
-def _bare_prompt_seed(messages: list[Message], salt: int = 0) -> int:
-    payload = json.dumps(
-        _without_experience(messages), ensure_ascii=False, sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    if salt:
-        payload += b"\x00salt=" + str(salt).encode("ascii")
-    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") % (2**31)
-
-
 class VllmClient:
     def __init__(
         self, base_url: str, model: str, *, timeout: float = 600.0, max_context: int = 12288,
-        lora_prefix: str = "", generation_seed_mode: str = "none",
-        generation_seed_salt: int = 0,
+        lora_prefix: str = "",
     ):
         self.base_url = base_url.rstrip("/")
         if self.base_url.endswith("/v1"):  # paths below carry /v1 already
@@ -81,10 +61,6 @@ class VllmClient:
         self.model = model
         self.timeout = timeout
         self.max_context = max_context
-        if generation_seed_mode not in ("none", "bare_prompt_hash"):
-            raise ValueError(f"unknown generation seed mode: {generation_seed_mode!r}")
-        self.generation_seed_mode = generation_seed_mode
-        self.generation_seed_salt = generation_seed_salt
         # hybrid-reasoning bases need enable_thinking=False; the trainer derives
         # the same kwargs from its tokenizer so both renderings agree
         self.template_kwargs = template_kwargs(model)
@@ -158,8 +134,6 @@ class VllmClient:
         }
         if self.template_kwargs:
             payload["chat_template_kwargs"] = self.template_kwargs
-        if self.generation_seed_mode == "bare_prompt_hash":
-            payload["seed"] = _bare_prompt_seed(messages, self.generation_seed_salt)
         try:
             data = self._post("/v1/chat/completions", payload)
         except RuntimeError as e:
@@ -185,6 +159,18 @@ class VllmClient:
             if data is None:
                 return ""
         return self._strip_think(data["choices"][0]["message"]["content"] or "")
+
+    def count_tokens(self, messages: list[Message]) -> int:
+        """Count the canonical rendered transcript plus next-assistant boundary."""
+        tokenizer = self._tokenizer()
+        tokens = tokenizer.apply_chat_template(
+            [message.to_dict() for message in messages],
+            tokenize=True,
+            return_dict=False,
+            add_generation_prompt=True,
+            **self.template_kwargs,
+        )
+        return len(tokens)
 
     def _strip_think(self, text: str) -> str:
         """Drop a leading self-initiated <think>...</think> segment (see above)."""

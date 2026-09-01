@@ -100,6 +100,33 @@ class TrainSample:
     # top-k {token_id: logprob} of the model reading the evidence block. None
     # (or an empty per-message list) means plain CE on that message.
     teacher_by_msg: Optional[list[list[dict[int, float]]]] = None
+    # Local-teacher contexts (cfg.kl_teacher="local"): block texts keyed by
+    # "donor" / "failure"; the trainer injects each into the first user message
+    # and forwards it itself at the KL positions.
+    teacher_contexts: Optional[dict[str, str]] = None
+    # Exact behavior-policy log-prob for each rendered message token, recorded
+    # under the adapter that generated the trajectory BEFORE replay updates.
+    # Empty message entries are unsupervised. cfg.replay_is_clip uses these
+    # token-aligned values for truncated importance sampling.
+    behavior_logprobs_by_msg: Optional[list[list[float]]] = None
+    # Legacy sequence-level approximation retained for old serialized/in-memory
+    # callers. New step-wise samples never write it.
+    is_birth_logp: Optional[float] = None
+    # Multiplicative scale applied after the sample's token-mass normalization.
+    # Step-wise turn decay must live here: multiplying every token weight in a
+    # one-turn sample would otherwise cancel between numerator and denominator.
+    loss_scale: float = 1.0
+    # Preference pair (cfg.critic_mode="dpo_steps"): the rejected assistant
+    # action at the SAME prefix -- `messages` holds prefix + the chosen action
+    # as its last message. When set, the trainer optimises the Bradley-Terry
+    # log-ratio of the two continuations instead of weighted CE, and
+    # token_weights_by_msg is only carried for the [gates] forensics line.
+    rejected: Optional[str] = None
+    # Whole-trajectory preference pair. ``messages`` is the complete successful
+    # privileged redo in the stripped student view; this is the complete failed
+    # first attempt. The trainer scores every assistant action token on each
+    # trajectory and never treats environment observations as policy outputs.
+    rejected_messages: Optional[list[Message]] = None
 
 
 @dataclass
